@@ -1,0 +1,17 @@
+# credentials
+.pgpass
+.env
+*.pgpass
+
+# data snapshots
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+venv/
