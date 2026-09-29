@@ -1,0 +1,7 @@
+file,source,series,downloaded_utc,rows,rows_with_data,first_date,last_date,sha256
+tbill3m_fred.parquet,FRED,"DTB3 (3-month T-bill, secondary market, % p.a.)",2026-10-06 12:08,8806,8444,1993-01-04,2026-10-02,1c8e82613186c8e5
+vix_cboe.parquet,CBOE,cdn.cboe.com VIX_History.csv,2026-10-06 12:08,8528,8528,1993-01-04,2026-10-05,b64c6e3af68e2012
+vix_fred.parquet,FRED,VIXCLS,2026-10-06 12:08,8806,8528,1993-01-04,2026-10-02,33c8f68ad536731a
+yf_IWM.parquet,Yahoo Finance via yfinance,"IWM daily, auto_adjust=False, actions=True",2026-10-06 12:08,6628,6628,2000-05-26,2026-10-05,07cfcc3d14c2f459
+yf_QQQ.parquet,Yahoo Finance via yfinance,"QQQ daily, auto_adjust=False, actions=True",2026-10-06 12:08,6936,6936,1999-03-10,2026-10-05,8750bd37eb3886fe
+yf_SPY.parquet,Yahoo Finance via yfinance,"SPY daily, auto_adjust=False, actions=True",2026-10-06 12:08,8478,8478,1993-01-29,2026-10-05,ff5ca4be15deb40f
