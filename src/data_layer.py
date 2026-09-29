@@ -19,11 +19,14 @@ can be split consistently (see split_legs):
 
     intraday  = close / open - 1
     overnight = (1 + ret) / (close / open) - 1   # previous close to open, incl. dividend
+
+Processed tables go through save_processed / load_processed so later steps never
+touch file paths directly. load_tbill gives the raw 3-month T-bill rate.
 """
 import numpy as np
 import pandas as pd
 
-from config import PERMNOS, RAW, TICKERS
+from config import PERMNOS, PROCESSED, RAW, TICKERS
 
 COLUMNS = [
     "date", "ticker", "open", "high", "low", "close", "bid", "ask",
@@ -47,6 +50,22 @@ def split_legs(df):
     df["intraday"] = df["close"] / df["open"] - 1
     df["overnight"] = (1 + df["ret"]) / (df["close"] / df["open"]) - 1
     return df
+
+
+def load_tbill():
+    """FRED DTB3: 3-month T-bill, secondary market, annual % on a discount basis."""
+    return pd.read_parquet(RAW / "tbill3m_fred.parquet")["DTB3"].dropna()
+
+
+def save_processed(df, name):
+    PROCESSED.mkdir(parents=True, exist_ok=True)
+    path = PROCESSED / f"{name}.parquet"
+    df.to_parquet(path, index=False)
+    return path
+
+
+def load_processed(name):
+    return pd.read_parquet(PROCESSED / f"{name}.parquet")
 
 
 def _yfinance(ticker):
