@@ -60,6 +60,12 @@ def build(source="yfinance"):
     cal = NYSE.sessions_in_range(df["date"].min() - pd.Timedelta(days=10), END)
     df = df.merge(daily_rf(cal), on="date", how="left")
     df.loc[df["flag_first_row"], ["rf", "rf_days"]] = np.nan
+    # all T-bill interest goes to the overnight leg: a position held only intraday
+    # is in cash overnight and earns it there, never while holding the ETF
+    df["rf_overnight"] = df["rf"]
+    df["rf_intraday"] = np.where(df["flag_first_row"], np.nan, 0.0)
+    df["overnight_xs"] = df["overnight"] - df["rf_overnight"]
+    df["intraday_xs"] = df["intraday"] - df["rf_intraday"]
     df["sample"] = sample_of(df["date"])
     return df
 
@@ -209,8 +215,10 @@ NOTES = """## Notes and decisions
 - Yahoo's Adj Close follows its own convention (dividends deflate the past instead of being added to
   today's price), so `ret` differs from the CRSP-style hand calculation by up to about 2.5e-4 on ex-dates
   and by rounding noise elsewhere. CRSP `ret` will remove that once it is loaded.
-- `rf` is per close-to-close period. How to split it between the overnight and intraday legs (e.g. all
-  of it to the overnight holding, which spans weekends) is a step 4/5 decision; nothing here depends on it.
+- `rf` is per close-to-close period and is assigned entirely to the overnight leg (decided 16 Oct):
+  `rf_overnight = rf`, `rf_intraday = 0`, and `overnight_xs = overnight - rf_overnight`,
+  `intraday_xs = intraday` (arithmetic excess returns). The overnight period holds the weekends and
+  holidays, and the ~6.5 trading hours earn no T-bill interest in this convention.
 - Nothing is dropped: flagged days stay in the file and later steps choose whether to exclude them.
 """
 

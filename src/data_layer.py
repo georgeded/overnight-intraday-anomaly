@@ -21,7 +21,8 @@ can be split consistently (see split_legs):
     overnight = (1 + ret) / (close / open) - 1   # previous close to open, incl. dividend
 
 Processed tables go through save_processed / load_processed so later steps never
-touch file paths directly. load_tbill gives the raw 3-month T-bill rate.
+touch file paths directly. load_tbill gives the raw 3-month T-bill rate, load_vix
+the VIX close per NYSE session.
 """
 import numpy as np
 import pandas as pd
@@ -55,6 +56,22 @@ def split_legs(df):
 def load_tbill():
     """FRED DTB3: 3-month T-bill, secondary market, annual % on a discount basis."""
     return pd.read_parquet(RAW / "tbill3m_fred.parquet")["DTB3"].dropna()
+
+
+def load_vix():
+    """VIX close per NYSE session: CBOE, gaps filled from FRED, then the last close.
+
+    CBOE open/high/low are unreliable before 2006 and are not used. Rows on
+    market holidays (CBOE publishes some since 2022) are dropped.
+    """
+    import exchange_calendars as xc
+
+    cboe = pd.read_parquet(RAW / "vix_cboe.parquet")["close"]
+    fred = pd.read_parquet(RAW / "vix_fred.parquet")["VIXCLS"].dropna()
+    sessions = xc.get_calendar("XNYS", start="1990-01-01").sessions_in_range(cboe.index.min(), cboe.index.max())
+    vix = cboe.reindex(sessions).fillna(fred.reindex(sessions)).ffill()
+    vix.index.name = "date"
+    return vix.rename("vix")
 
 
 def save_processed(df, name):
