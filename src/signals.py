@@ -10,6 +10,11 @@ the next row (trade_date), so step 5 must pair signal(t) with overnight(t+1).
     sig_a  intraday(t) < 0
     sig_b  intraday(t) <= 20th percentile of intraday over the previous 252 sessions (t-252..t-1)
     sig_c  VIX close(t) > median VIX close over the previous 252 sessions (t-252..t-1)
+    sig_ac sig_a AND sig_c
+    sig_bc sig_b AND sig_c
+
+These five are the only candidates (combinations fixed on 16 Oct, before any returns
+were examined).
 
 Signals are NaN (not False) until a full 252-day window exists. No returns analysis here.
 """
@@ -25,7 +30,7 @@ from returns import sample_of
 
 WINDOW = 252
 PCT = 0.20
-SIGNALS = ["sig_a", "sig_b", "sig_c"]
+SIGNALS = ["sig_a", "sig_b", "sig_c", "sig_ac", "sig_bc"]
 # compared in the look-ahead tests: the signals and the thresholds behind them
 TESTED = SIGNALS + ["intraday_q20", "vix_median"]
 
@@ -54,6 +59,9 @@ def compute_signals(ret, vix, lag=1):
         g["sig_a"] = _bool(intra < 0, intra.notna())
         g["sig_b"] = _bool(intra <= g["intraday_q20"], g["intraday_q20"].notna() & intra.notna())
         g["sig_c"] = _bool(g["vix"] > g["vix_median"], g["vix_median"].notna() & g["vix"].notna())
+        # NA if either part is NA (not pandas' Kleene logic, where False & NA = False)
+        g["sig_ac"] = _bool(g["sig_a"].fillna(False) & g["sig_c"].fillna(False), g["sig_a"].notna() & g["sig_c"].notna())
+        g["sig_bc"] = _bool(g["sig_b"].fillna(False) & g["sig_c"].fillna(False), g["sig_b"].notna() & g["sig_c"].notna())
         out.append(g)
     return pd.concat(out, ignore_index=True)
 
@@ -142,7 +150,7 @@ def frequency(sig):
     s = sig.assign(year=sig["date"].dt.year)
     share = s.groupby(["year", "ticker"])[SIGNALS].mean().unstack("ticker")
     share.columns = [f"{t} {c[4:]}" for c, t in share.columns]
-    order = [f"{t} {x}" for t in ["SPY", "QQQ", "IWM"] for x in "abc"]
+    order = [f"{t} {x}" for t in ["SPY", "QQQ", "IWM"] for x in ["a", "b", "c", "ac", "bc"]]
     return share[order]
 
 
@@ -199,6 +207,8 @@ def report(source="yfinance"):
            "the previous 252 sessions, t-252 to t-1 (today is excluded from its own window)",
            "- `sig_c`: VIX close(t) > median VIX close over the previous 252 NYSE sessions, t-252 to t-1. VIX is the "
            "CBOE close per NYSE session, gaps filled from FRED (see `data_layer.load_vix`); the same series for all ETFs",
+           "- `sig_ac` = `sig_a` AND `sig_c`; `sig_bc` = `sig_b` AND `sig_c`. These five are the only candidates, "
+           "fixed before any returns were examined. A combination is NA if either part is NA.",
            "- Until a full 252-day window exists the signal is missing (NA), not False. "
            f"First `sig_b`: {timing['first_sig_b']}. First `sig_c`: {timing['first_sig_c']}.",
            "- `sample` is the sample of the night traded (`trade_date`), so a signal on 2012-12-31 belongs to validation.",
@@ -207,7 +217,7 @@ def report(source="yfinance"):
            "`overnight_xs`, `intraday_xs`).", "",
            "## Look-ahead tests", "",
            f"Run at {len(cutoffs)} cut-off dates (20 random plus the train/validation and validation/test boundaries).", "",
-           "Each test compares the three signals and the two thresholds behind them (`intraday_q20`, `vix_median`) exactly.", "",
+           "Each test compares the five signals and the two thresholds behind them (`intraday_q20`, `vix_median`) exactly.", "",
            "| Test | Real signals | Leaky control (window shifted one day into the future) |",
            "|---|---|---|",
            f"| Truncation: recompute with data up to T only; signals on or before T unchanged | "
