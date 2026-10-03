@@ -21,3 +21,8 @@ SAMPLES = {
 
 # Last day every raw source covers (FRED ends 2026-10-02 in the current snapshot)
 END = "2026-10-02"
+
+# Step 7: signal chosen on validation (2013-2018) by the rule fixed beforehand:
+# highest Sharpe at 1 bp per trade averaged over SPY, QQQ and IWM, ties (2 dp)
+# broken by fewer trades. Frozen: do not change after looking at the test sample.
+CHOSEN_SIGNAL = "sig_a"

@@ -39,14 +39,28 @@ SPREAD_WINDOW = 21  # days averaged in the Corwin-Schultz estimate
 TICKERS = ["SPY", "QQQ", "IWM"]
 
 
-# ---------- data (train only) ---------------------------------------------------
+# ---------- data -----------------------------------------------------------------
+
+def load_sample(source, sample="train"):
+    """Rows up to the end of `sample`; nothing later is ever loaded.
+
+    Earlier rows are kept only so the backward-looking spread estimate has history
+    at the start of the window; strategies are evaluated on `sample` rows only
+    (see legs).
+    """
+    end = pd.Timestamp(SAMPLES[sample][1])
+    ret = load_processed(f"returns_{source}")
+    ret = ret[ret["date"] <= end].copy()
+    sig = load_processed(f"signals_{source}")
+    sig = sig[sig["trade_date"] <= end].copy()
+    assert ret["date"].max() <= end and sig["trade_date"].max() <= end
+    if sample != "test":
+        assert "test" not in set(ret["sample"]) | set(sig["sample"])
+    return ret, sig
+
 
 def load_train(source):
-    ret = load_processed(f"returns_{source}")
-    ret = ret[ret["date"] <= TRAIN_END].copy()
-    sig = load_processed(f"signals_{source}")
-    sig = sig[sig["trade_date"] <= TRAIN_END].copy()
-    assert ret["date"].max() <= TRAIN_END and sig["trade_date"].max() <= TRAIN_END
+    ret, sig = load_sample(source, "train")
     assert set(ret["sample"]) == {"train"} and set(sig["sample"]) == {"train"}
     return ret, sig
 
@@ -82,8 +96,8 @@ def quoted_half_spread(g):
     return ((g["ask"] - g["bid"]) / 2 / mid).where(mid > 0).shift(1)
 
 
-def legs(ret, sig, ticker):
-    """Per-day frame for one ETF over its common window."""
+def legs(ret, sig, ticker, sample="train"):
+    """Per-day frame for one ETF over its common window inside `sample`."""
     g = ret[ret["ticker"] == ticker].sort_values("date").reset_index(drop=True)
     has_bidask = g["bid"].notna().any() and g["ask"].notna().any()
     g["cost_spread"] = quoted_half_spread(g) if has_bidask else corwin_schultz(g)
@@ -91,8 +105,9 @@ def legs(ret, sig, ticker):
     s = sig[sig["ticker"] == ticker].set_index("trade_date")[SIGNALS]
     for c in SIGNALS:
         g[c] = s[c].reindex(g["date"]).to_numpy()  # signal from the previous close, for tonight's leg
-    start = g.loc[g[SIGNALS].notna().all(axis=1), "date"].min()
+    start = max(g.loc[g[SIGNALS].notna().all(axis=1), "date"].min(), pd.Timestamp(SAMPLES[sample][0]))
     g = g[g["date"] >= start].reset_index(drop=True)
+    assert set(g["sample"]) == {sample}
     assert g[SIGNALS].notna().all().all()
     for c in SIGNALS:
         g[c] = g[c].astype(bool)
@@ -210,12 +225,12 @@ def run_overnight_only(pos, on, rf_on, cost):
 
 # ---------- report -------------------------------------------------------------
 
-def backtest(source="yfinance"):
-    ret, sig = load_train(source)
+def backtest(source="yfinance", sample="train"):
+    ret, sig = load_sample(source, sample)
     rng = np.random.default_rng(2026)
     perf, be, plc, windows, spread_by_year = [], [], [], [], []
     for t in TICKERS:
-        g, spread_src = legs(ret, sig, t)
+        g, spread_src = legs(ret, sig, t, sample)
         yrs = years_of(g)
         windows.append({"ticker": t, "first_day": g["date"].min().date(), "last_day": g["date"].max().date(),
                         "days": len(g), "years": yrs,
@@ -255,9 +270,9 @@ def backtest(source="yfinance"):
     return pd.DataFrame(perf), pd.DataFrame(be), pd.DataFrame(plc), pd.DataFrame(windows), spread_tab
 
 
-def check_engine(ret, sig):
+def check_engine(ret, sig, sample="train"):
     """Sanity checks of the engine against numbers computed independently."""
-    g, _ = legs(ret, sig, "SPY")
+    g, _ = legs(ret, sig, "SPY", sample)
     rows = []
     d, tr = run(g, np.ones(len(g)), np.ones(len(g)), 0.0)
     rows.append({"check": "buy_hold at 0 bp = compounded ret",
@@ -277,35 +292,33 @@ def check_engine(ret, sig):
     return pd.DataFrame(rows)
 
 
-def report(source="yfinance"):
-    ret, sig = load_train(source)
-    perf, be, plc, win, spread_tab = backtest(source)
-    eng = check_engine(ret, sig)
+SETUP = [
+    "## Set-up", "",
+    "- Each day is two legs, overnight (previous close to open) and intraday (open to close). Each leg is either "
+    "fully in the ETF or fully in cash; no leverage.",
+    "- Cash earns the T-bill rate on the overnight leg (where all T-bill interest sits, step 4); cash intraday "
+    "earns 0. ETF legs earn `overnight` (total return, dividends included) and `intraday`.",
+    "- A trade is any change of position between consecutive legs, plus the entry at the start and the exit at "
+    "the end. Holding one night = buy at the close, sell at the next open = 2 trades. Cost is per trade, "
+    "one-way, as a fraction of the position.",
+    "- `on_<signal>` holds the overnight leg of day d when the signal computed at the close of d-1 is on.",
+    "- Spread estimate: half of the Corwin-Schultz (2012) high-low spread, averaged over the previous 21 days, "
+    "used as the one-way cost of every trade (closing bid/ask is used instead when the source has it, i.e. CRSP).",
+    "- Sharpe: annualised mean daily return in excess of the T-bill over its standard deviation, × √252. "
+    "Annual return: compounded, over years = days / 252. Max drawdown on the daily equity curve.",
+    "- Breakeven cost: per-trade cost at which the strategy's annual return falls to that of cash (T-bill) or "
+    "of buy-and-hold at zero cost.",
+    f"- Placebo: {N_PLACEBO} random sets of overnight legs in the same window with the same number of nights as "
+    "the signal; percentile = share of placebo draws below the signal. Costs are per night, so with flat costs "
+    "the percentile is the same at every cost level; it is shown at 0 bp.", "",
+]
+
+
+def body(perf, be, plc, win, spread_tab, eng):
+    """Window, engine checks, performance at every cost, breakevens and placebo, as markdown lines."""
     names = ["buy_hold", "intraday", "overnight"] + [f"on_{s}" for s in SIGNALS]
     cols = ["strategy", "cum_ret_%", "ann_ret_%", "sharpe", "max_dd_%", "nights_in_%", "trades_per_yr"]
-
-    out = [f"# Step 6: backtest ({source}, train sample only)", "",
-           f"Generated by `python src/backtest.py {source}`. Only rows up to {TRAIN_END.date()} are loaded (asserted); "
-           "nothing on validation or test rows.", "",
-           "## Set-up", "",
-           "- Each day is two legs, overnight (previous close to open) and intraday (open to close). Each leg is either "
-           "fully in the ETF or fully in cash; no leverage.",
-           "- Cash earns the T-bill rate on the overnight leg (where all T-bill interest sits, step 4); cash intraday "
-           "earns 0. ETF legs earn `overnight` (total return, dividends included) and `intraday`.",
-           "- A trade is any change of position between consecutive legs, plus the entry at the start and the exit at "
-           "the end. Holding one night = buy at the close, sell at the next open = 2 trades. Cost is per trade, "
-           "one-way, as a fraction of the position.",
-           "- `on_<signal>` holds the overnight leg of day d when the signal computed at the close of d-1 is on.",
-           "- Spread estimate: half of the Corwin-Schultz (2012) high-low spread, averaged over the previous 21 days, "
-           "used as the one-way cost of every trade (closing bid/ask is used instead when the source has it, i.e. CRSP).",
-           "- Sharpe: annualised mean daily return in excess of the T-bill over its standard deviation, × √252. "
-           "Annual return: compounded, over years = days / 252. Max drawdown on the daily equity curve.",
-           "- Breakeven cost: per-trade cost at which the strategy's annual return falls to that of cash (T-bill) or "
-           "of buy-and-hold at zero cost.",
-           f"- Placebo: {N_PLACEBO} random sets of overnight legs in the same window with the same number of nights as "
-           "the signal; percentile = share of placebo draws below the signal. Costs are per night, so with flat costs "
-           "the percentile is the same at every cost level; it is shown at 0 bp and with the spread estimate.", "",
-           "Common window per ETF (from the first night on which all five signals exist):", "",
+    out = ["Common window per ETF:", "",
            md_table(win, "{:.2f}"), "",
            "Corwin-Schultz one-way cost by year (bp, mean of the daily estimate):", "",
            md_table(spread_tab.round(1).astype(object).where(spread_tab.notna(), ""), "{:.1f}"), "",
@@ -324,7 +337,20 @@ def report(source="yfinance"):
             "One-way cost per trade at which the strategy's annual return drops to the benchmark's. "
             "`-` = below the benchmark even at zero cost.", "",
             md_table(be_tab.round(2).astype(object).where(be_tab.notna(), "-"), "{:.2f}"), "",
-            "## Placebo", "", md_table(plc, "{:.2f}"), "", NOTES]
+            "## Placebo", "", md_table(plc, "{:.2f}"), ""]
+    return out
+
+
+def report(source="yfinance"):
+    ret, sig = load_train(source)
+    perf, be, plc, win, spread_tab = backtest(source)
+    eng = check_engine(ret, sig)
+    out = [f"# Step 6: backtest ({source}, train sample only)", "",
+           f"Generated by `python src/backtest.py {source}`. Only rows up to {TRAIN_END.date()} are loaded (asserted); "
+           "nothing on validation or test rows.", ""]
+    out += SETUP
+    out += ["Each window starts at the first night on which all five signals exist.", ""]
+    out += body(perf, be, plc, win, spread_tab, eng) + [NOTES]
     p = ROOT / "reports" / "step6_backtest.md"
     p.write_text("\n".join(out))
     print(f"wrote {p.relative_to(ROOT)}")
