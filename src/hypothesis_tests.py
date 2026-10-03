@@ -84,16 +84,17 @@ def nights(ret, sig, exclude):
     for c in SIGNALS:
         n[c] = n[c].astype("Float64").astype(float)  # NA -> NaN, dropped per regression
     if exclude:
-        n = n[~(n["flagged"] | n["flagged_next"])]
+        # a signal day just before the loaded rows has no flag here: treat as unflagged
+        n = n[~(n["flagged"].astype("boolean").fillna(False).astype(bool) | n["flagged_next"])]
     return n
 
 
 # ---------- H1 ----------------------------------------------------------------
 
-def h1(ret, exclude):
+def h1(ret, exclude, periods=None):
     rows = []
     d = daily(ret, exclude)
-    periods = {"1993-2012": ("1993-01-01", "2012-12-31"), **SUBPERIODS}
+    periods = periods or {"1993-2012": ("1993-01-01", "2012-12-31"), **SUBPERIODS}
     for t in ["SPY", "QQQ", "IWM"]:
         for name, (a, b) in periods.items():
             g = d[(d["ticker"] == t) & (d["date"] >= a) & (d["date"] <= b)]

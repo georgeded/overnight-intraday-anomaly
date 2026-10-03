@@ -96,8 +96,12 @@ def quoted_half_spread(g):
     return ((g["ask"] - g["bid"]) / 2 / mid).where(mid > 0).shift(1)
 
 
-def legs(ret, sig, ticker, sample="train"):
-    """Per-day frame for one ETF over its common window inside `sample`."""
+def legs(ret, sig, ticker, sample="train", window=None):
+    """Per-day frame for one ETF over its common window inside `sample`.
+
+    window: optional (start, end) to cut the frame further, e.g. a sub-period. The
+    spread estimate is computed before cutting, so it keeps its history.
+    """
     g = ret[ret["ticker"] == ticker].sort_values("date").reset_index(drop=True)
     has_bidask = g["bid"].notna().any() and g["ask"].notna().any()
     g["cost_spread"] = quoted_half_spread(g) if has_bidask else corwin_schultz(g)
@@ -107,6 +111,8 @@ def legs(ret, sig, ticker, sample="train"):
         g[c] = s[c].reindex(g["date"]).to_numpy()  # signal from the previous close, for tonight's leg
     start = max(g.loc[g[SIGNALS].notna().all(axis=1), "date"].min(), pd.Timestamp(SAMPLES[sample][0]))
     g = g[g["date"] >= start].reset_index(drop=True)
+    if window is not None:
+        g = g[(g["date"] >= window[0]) & (g["date"] <= window[1])].reset_index(drop=True)
     assert set(g["sample"]) == {sample}
     assert g[SIGNALS].notna().all().all()
     for c in SIGNALS:
@@ -156,11 +162,11 @@ def metrics(daily, rf, trades, nights_in, years):
     }
 
 
-def strategies(g):
+def strategies(g, signals=SIGNALS):
     n = len(g)
     one, zero = np.ones(n), np.zeros(n)
     out = {"buy_hold": (one, one), "intraday": (zero, one), "overnight": (one, zero)}
-    for s in SIGNALS:
+    for s in signals:
         out[f"on_{s}"] = (g[s].to_numpy().astype(float), zero)
     return out
 
@@ -225,18 +231,19 @@ def run_overnight_only(pos, on, rf_on, cost):
 
 # ---------- report -------------------------------------------------------------
 
-def backtest(source="yfinance", sample="train"):
+def backtest(source="yfinance", sample="train", signals=SIGNALS, window=None):
+    """All strategies for `signals` on `sample` (optionally a sub-window of it)."""
     ret, sig = load_sample(source, sample)
     rng = np.random.default_rng(2026)
     perf, be, plc, windows, spread_by_year = [], [], [], [], []
     for t in TICKERS:
-        g, spread_src = legs(ret, sig, t, sample)
+        g, spread_src = legs(ret, sig, t, sample, window)
         yrs = years_of(g)
         windows.append({"ticker": t, "first_day": g["date"].min().date(), "last_day": g["date"].max().date(),
                         "days": len(g), "years": yrs,
                         "mean_spread_cost_bp": g["cost_spread"].mean() * 1e4,
                         "median_spread_cost_bp": g["cost_spread"].median() * 1e4, "spread_source": spread_src})
-        strats = strategies(g)
+        strats = strategies(g, signals)
         for name, (p_on, p_in) in strats.items():
             for c in COSTS_BP:
                 perf.append({"ticker": t, **evaluate(g, name, p_on, p_in, c / 1e4, f"{c} bp")})
@@ -253,7 +260,7 @@ def backtest(source="yfinance", sample="train"):
         # placebo at zero cost: with a flat cost every draw pays the same per night, so the
         # ranking of annual returns is unchanged at any flat cost level
         spread_by_year.append(g.groupby(g["date"].dt.year)["cost_spread"].mean().rename(t) * 1e4)
-        for s in SIGNALS:
+        for s in signals:
             for cost, label in [(0.0, "0 bp")]:
                 daily, _ = run(g, g[s].to_numpy().astype(float), np.zeros(len(g)), cost)
                 xs = daily - g["rf"].to_numpy()
