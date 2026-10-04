@@ -202,7 +202,51 @@ def render(path=RESULTS, report=ROOT / "reports" / "step8_test.md", notes=""):
     print(f"wrote {report.relative_to(ROOT) if report.is_relative_to(ROOT) else report}")
 
 
-NOTES = ""
+NOTES = """## Results in brief (written after the single run; nothing was recomputed)
+
+**Backtests, 2019-01-02 to 2026-10-02, before costs (0 bp)**
+
+| | Buy-and-hold | Always overnight | Always intraday | `sig_a` | `sig_a` placebo percentile |
+|---|---|---|---|---|---|
+| SPY | 17.4% / 0.78 / -34% | 10.1% / 0.60 / -29% | 9.6% / 0.52 / -14% | 7.1% / 0.50 / -13% | 66th |
+| QQQ | 23.4% / 0.88 / -35% | 13.2% / 0.72 / -27% | 12.2% / 0.56 / -24% | 7.7% / 0.49 / -17% | 55th |
+| IWM | 11.5% / 0.45 / -41% | 17.6% / 0.92 / -29% | -2.6% / -0.19 / -48% | 10.5% / 0.69 / -18% | 55th |
+
+(annual return / Sharpe / max drawdown; placebo percentile on annual return)
+
+- **The chosen signal has no edge out of sample.** `sig_a` sits at the 55th-66th percentile of 1,000 random sets
+  of nights, with lower return and Sharpe than always-overnight before costs on every ETF. Because it trades
+  less than half as often, it loses less than always-overnight once costs are 2 bp or more, but it never beats
+  buy-and-hold, and it stops beating cash at 1.8-2.8 bp per trade. It was 2019-2020 that went worst for it (27th
+  percentile on QQQ); in 2021+ it was at the 74th-75th percentile for SPY and QQQ, still well short of significant.
+- **Always-overnight:** for SPY and QQQ the overnight and intraday legs earned about the same in 2019-2026, so
+  the overnight-only strategy lost to buy-and-hold even before costs. IWM is the exception: overnight 17.6% a
+  year against -2.6% intraday and 11.5% buy-and-hold, with twice the buy-and-hold Sharpe, but the edge over
+  buy-and-hold disappears at about 1.1 bp per trade and over cash at 2.7 bp.
+- **Costs dominate**, as in train and validation: at 2 bp per trade every overnight strategy is at or below cash
+  on SPY and QQQ; at 5 bp every active strategy loses money. The Corwin-Schultz numbers are again a pessimistic
+  bound, not a realistic cost (step 6).
+
+**H4: has the overnight effect changed?**
+
+- **The overnight-intraday gap is no longer significant for SPY and QQQ.** Daily gap in train vs 2019-2020 vs
+  2021+: SPY 3.3 / 1.9 / -0.5 bp, QQQ 7.9 / 0.1 / 0.2 bp (all days); none of the test-period gaps is significant.
+  IWM keeps a large gap (11.7 bp in 2019-2020, 5.7 bp in 2021+), significant at 10% / 5% in some
+  specifications. But the tests of a *change* versus train are not significant (smallest p = 0.09, QQQ 2021+), so
+  the data are consistent with the effect having weakened for large caps, without proving that it has.
+  Excluding flagged days gives the same picture.
+- **H2 holds outside 2020.** The H2 regression is as uninformative in 2021+ as in train (slopes equal to train,
+  p = 0.13-0.91). 2019-2020 is the exception: for SPY and QQQ a `sig_b` day was followed by a much worse night
+  (SPY -57 bp, t = -3.2), so the slopes differ from train (SPY p = 0.004). That is the March 2020 crash, where
+  large intraday falls were followed by further falls overnight, and it goes in the opposite direction to the
+  "buy after a bad day" idea.
+
+**Bottom line.** The overnight premium was large and significant in 1993-2007, weaker after, and in 2019-2026 it
+survives only in small caps (IWM). None of the five conditional signals beat random nights in train, the one
+picked on validation did not beat random nights in the test, and at realistic trading costs (2 bp or more per
+trade, i.e. 4 bp per night) no overnight strategy beats buy-and-hold. All results are on Yahoo data and should be
+re-run once CRSP is available, without changing anything else.
+"""
 
 
 if __name__ == "__main__":
