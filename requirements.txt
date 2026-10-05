@@ -6,3 +6,4 @@ exchange_calendars
 psycopg[binary]
 statsmodels
 scipy
+matplotlib

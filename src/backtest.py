@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 
 from checks import md_table
-from config import ROOT, SAMPLES
+from config import END, ROOT, SAMPLES
 from data_layer import load_processed
 from signals import SIGNALS
 
@@ -41,6 +41,11 @@ TICKERS = ["SPY", "QQQ", "IWM"]
 
 # ---------- data -----------------------------------------------------------------
 
+def _bounds(sample):
+    """Date range of a sample; "all" is the whole data set (robustness checks only)."""
+    return (SAMPLES["train"][0], END) if sample == "all" else SAMPLES[sample]
+
+
 def load_sample(source, sample="train"):
     """Rows up to the end of `sample`; nothing later is ever loaded.
 
@@ -48,13 +53,13 @@ def load_sample(source, sample="train"):
     at the start of the window; strategies are evaluated on `sample` rows only
     (see legs).
     """
-    end = pd.Timestamp(SAMPLES[sample][1])
+    end = pd.Timestamp(_bounds(sample)[1])
     ret = load_processed(f"returns_{source}")
     ret = ret[ret["date"] <= end].copy()
     sig = load_processed(f"signals_{source}")
     sig = sig[sig["trade_date"] <= end].copy()
     assert ret["date"].max() <= end and sig["trade_date"].max() <= end
-    if sample != "test":
+    if sample not in ("test", "all"):
         assert "test" not in set(ret["sample"]) | set(sig["sample"])
     return ret, sig
 
@@ -109,11 +114,11 @@ def legs(ret, sig, ticker, sample="train", window=None):
     s = sig[sig["ticker"] == ticker].set_index("trade_date")[SIGNALS]
     for c in SIGNALS:
         g[c] = s[c].reindex(g["date"]).to_numpy()  # signal from the previous close, for tonight's leg
-    start = max(g.loc[g[SIGNALS].notna().all(axis=1), "date"].min(), pd.Timestamp(SAMPLES[sample][0]))
+    start = max(g.loc[g[SIGNALS].notna().all(axis=1), "date"].min(), pd.Timestamp(_bounds(sample)[0]))
     g = g[g["date"] >= start].reset_index(drop=True)
     if window is not None:
         g = g[(g["date"] >= window[0]) & (g["date"] <= window[1])].reset_index(drop=True)
-    assert set(g["sample"]) == {sample}
+    assert sample == "all" or set(g["sample"]) == {sample}
     assert g[SIGNALS].notna().all().all()
     for c in SIGNALS:
         g[c] = g[c].astype(bool)
