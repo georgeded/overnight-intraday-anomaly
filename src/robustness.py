@@ -17,6 +17,7 @@ import sys
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.dates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -355,7 +356,9 @@ def chart(G, cost_bp, path):
             ax.spines[side].set_visible(False)
         ax.tick_params(colors="#52514e", labelsize=8)
         ax.set_xlim(g["date"].min(), g["date"].max() + pd.Timedelta(days=1400))
-        ax.set_xticks([x for x in ax.get_xticks() if x <= matplotlib.dates.date2num(g["date"].max())])
+        first, last = g["date"].min().year, g["date"].max().year
+        ax.set_xticks([pd.Timestamp(f"{y}-01-01") for y in range(first + (4 - first % 4) % 4, last + 1, 4)])
+        ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%Y"))
     axes[0].legend(loc="upper left", fontsize=8, frameon=False)
     fig.patch.set_facecolor("#fcfcfb")
     for ax in axes:
