@@ -1,15 +1,10 @@
-"""Step 7: run the step 6 strategies unchanged on the VALIDATION sample (2013-2018)
-and pick one signal by a rule fixed before the run.
+# Step 7: run the step 6 strategies on validation (2013-2018) and pick one signal
+#
+#     python src/validation.py
+#
+# Rule fixed before the run: best Sharpe at 1 bp averaged over the three ETFs,
+# ties at two decimals go to the signal that trades less
 
-    python src/validation.py            # yfinance (default)
-
-Selection rule (fixed 16 Oct, before any validation result was computed):
-    for each of the 5 signals, average its Sharpe ratio at 1 bp per trade over
-    SPY, QQQ and IWM; the highest average wins. Averages equal to two decimals
-    count as a tie, broken by fewer trades per year (averaged over the ETFs).
-
-No test rows (2019+) are loaded: load_sample stops at 2018-12-31 and asserts it.
-"""
 import sys
 
 import numpy as np
@@ -24,26 +19,29 @@ SAMPLE = "validation"
 SELECT_COST = "1 bp"
 
 
+# Apply the fixed rule, returns the signal and the ranking
 def select(perf):
-    """Apply the fixed rule. Returns (chosen signal, table of the ranking)."""
     p = perf[(perf["cost"] == SELECT_COST) & perf["strategy"].str.startswith("on_sig")]
     per_etf = p.pivot(index="strategy", columns="ticker", values="sharpe")[TICKERS]
     trades = p.groupby("strategy")["trades_per_yr"].mean()
+
     tab = per_etf.assign(mean_sharpe=per_etf.mean(axis=1), mean_trades_per_yr=trades)
     tab["mean_sharpe_2dp"] = tab["mean_sharpe"].round(2)
     tab = tab.sort_values(["mean_sharpe_2dp", "mean_trades_per_yr"], ascending=[False, True])
     tab["rank"] = np.arange(1, len(tab) + 1)
+
     chosen = tab.index[0].removeprefix("on_")
     return chosen, tab.rename_axis("strategy").reset_index()
 
 
+# Sharpe at 1 bp in train and validation side by side
 def train_vs_validation(perf_train, perf_val):
-    """Sharpe at 1 bp per trade in both samples, for every strategy and ETF."""
     rows = []
     for name, p in [("train", perf_train), ("validation", perf_val)]:
         q = p[p["cost"] == SELECT_COST].pivot(index="strategy", columns="ticker", values="sharpe")[TICKERS]
         q.columns = [f"{t} {name}" for t in TICKERS]
         rows.append(q)
+
     tab = pd.concat(rows, axis=1)
     order = ["buy_hold", "intraday", "overnight"] + [f"on_{s}" for s in SIGNALS]
     return tab.loc[order, [f"{t} {n}" for t in TICKERS for n in ["train", "validation"]]].rename_axis("strategy")
@@ -94,6 +92,7 @@ def report(source="yfinance"):
     out += ["Every signal is defined throughout validation, so each window is the whole 2013-2018 period.", ""]
     out += body(perf, be, plc, win, spread_tab, eng)
     out += [NOTES]
+
     p = ROOT / "reports" / "step7_validation.md"
     p.write_text("\n".join(out))
     print(f"wrote {p.relative_to(ROOT)}; chosen signal: {chosen}")

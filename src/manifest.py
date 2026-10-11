@@ -1,8 +1,6 @@
-"""Step 1: record what is in data/raw (source, download date, coverage, checksum).
+# Step 1: record what is in data/raw (source, download date, coverage, checksum)
+# manifest.csv is tracked in git so every report can point to the exact snapshot
 
-Writes data/raw/manifest.csv, which is tracked in git even though the data files
-are not, so a report can always say exactly which snapshot it was run on.
-"""
 import hashlib
 from datetime import datetime, timezone
 
@@ -21,7 +19,7 @@ SOURCES = {
     "crsp_dsf_v2.parquet": ("WRDS CRSP", "crsp.dsf_v2 (CIZ daily stock file)"),
 }
 
-# first date each file must cover (fund launch dates; VIX and T-bill from SPY start)
+# First date each file must cover (fund launches, VIX and T-bill from SPY's start)
 REQUIRED = {
     "yf_SPY.parquet": "1993-01-29",
     "yf_QQQ.parquet": "1999-03-10",
@@ -42,10 +40,12 @@ def describe(path):
     df = pd.read_parquet(path)
     if "date" in df.columns:
         df = df.set_index("date")
+
     idx = pd.to_datetime(df.index)
-    valid = df.notna().any(axis=1).to_numpy()  # FRED rows on holidays are all NaN
+    valid = df.notna().any(axis=1).to_numpy()  # FRED has empty rows on holidays
     source, detail = SOURCES.get(path.name, ("unknown", ""))
     mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+
     return {
         "file": path.name,
         "source": source,
@@ -62,6 +62,7 @@ def describe(path):
 def build():
     rows = [describe(p) for p in sorted(RAW.glob("*.parquet"))]
     man = pd.DataFrame(rows)
+
     missing = sorted(set(REQUIRED) - set(man["file"]))
     late = [
         r["file"] for r in rows
@@ -73,6 +74,7 @@ def build():
 def main():
     man, missing, late = build()
     man.to_csv(RAW / "manifest.csv", index=False)
+
     print(man.to_string(index=False))
     print("missing files:", missing or "none")
     print("starting later than required:", late or "none")

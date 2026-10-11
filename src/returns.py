@@ -1,18 +1,14 @@
-"""Step 3: build and verify the daily return series. No statistics here.
+# Step 3: build and verify the daily returns, no statistics yet
+#
+#     python src/returns.py          # yfinance
+#     python src/returns.py crsp
+#
+# Per ETF and day:
+#     ret        close to close total return
+#     overnight  previous close to open, dividend included
+#     intraday   close / open - 1
+#     rf         T-bill return over the same close to close period
 
-    python src/returns.py            # yfinance (default)
-    python src/returns.py crsp
-
-Builds, per ETF and trading day:
-
-    ret        close-to-close total return (dividends included)
-    overnight  (1 + ret) / (close / open) - 1   previous close to open, incl. dividend
-    intraday   close / open - 1
-    rf         T-bill return over the same close-to-close period
-
-and keeps the step 2 flags. Saves returns_<source> through the data layer and writes
-reports/step3_returns.md with the verification results.
-"""
 import sys
 
 import exchange_calendars as xc
@@ -23,20 +19,16 @@ from checks import NYSE, flag_panel, md_table
 from config import END, ROOT, SAMPLES
 from data_layer import load_prices, load_tbill, save_processed
 
-BILL_DAYS = 91  # DTB3 is the 13-week bill
+BILL_DAYS = 91  # DTB3 is the 13 week bill
 
 
+# Risk-free return from each close to the next, from DTB3
+# Bill price is 1 - d * 91/360, compounded per calendar day so weekends earn too
+# Bond market holidays carry the last rate forward
 def daily_rf(dates):
-    """Risk-free return from each session's close to the next, from DTB3.
-
-    DTB3 is an annual percentage on a bank-discount basis: price = 1 - d * 91/360.
-    The bill's holding-period return is 1/price - 1 over 91 calendar days; it is
-    compounded per calendar day so weekends and holidays earn interest too. The rate
-    observed at the previous session's close applies to the period ending today.
-    Missing days (bond-market holidays) carry the last rate forward.
-    """
     sessions = pd.DatetimeIndex(sorted(set(dates)))
     d = load_tbill().reindex(sessions.union(load_tbill().index)).ffill().reindex(sessions) / 100
+
     per_day = (1 / (1 - d * BILL_DAYS / 360)) ** (1 / BILL_DAYS)
     prev = pd.Series(sessions, index=sessions).shift()
     days = (sessions.to_series() - prev).dt.days
@@ -56,36 +48,36 @@ def build(source="yfinance"):
     px = load_prices(source)
     px = px[px["date"] <= END]
     df = flag_panel(px).drop(columns=["prev_close"])
-    # rf over each ETF's own previous-session-to-today period, from the NYSE calendar
+
+    # rf for each ETF from its previous session to today
     cal = NYSE.sessions_in_range(df["date"].min() - pd.Timedelta(days=10), END)
     df = df.merge(daily_rf(cal), on="date", how="left")
     df.loc[df["flag_first_row"], ["rf", "rf_days"]] = np.nan
-    # all T-bill interest goes to the overnight leg: a position held only intraday
-    # is in cash overnight and earns it there, never while holding the ETF
+
+    # all T-bill interest goes to the overnight leg, an intraday-only position
+    # sits in cash overnight and earns it there
     df["rf_overnight"] = df["rf"]
     df["rf_intraday"] = np.where(df["flag_first_row"], np.nan, 0.0)
     df["overnight_xs"] = df["overnight"] - df["rf_overnight"]
     df["intraday_xs"] = df["intraday"] - df["rf_intraday"]
+
     df["sample"] = sample_of(df["date"])
     return df
 
 
-# ---------- verification ------------------------------------------------------
+# Verification
 
+# (1 + overnight)(1 + intraday) should equal 1 + ret every day
 def identity_check(df):
-    """(1 + overnight)(1 + intraday) = 1 + ret on every day with a return."""
     d = df[~df["flag_first_row"]]
     err = ((1 + d["overnight"]) * (1 + d["intraday"]) - (1 + d["ret"])).abs()
     return d.assign(err=err).groupby("ticker")["err"].agg(["size", "max"]).rename(
         columns={"size": "days", "max": "max_abs_error"})
 
 
+# Compounded legs should give the compounded total return
+# Only the errors are shown, the growth levels are results for later
 def cumulative_check(df):
-    """Compounded legs reproduce compounded total return, per ETF and sample.
-
-    Only the errors are reported: the growth levels themselves are results, which
-    belong to step 5 (and the test sample stays unseen).
-    """
     rows = []
     for (t, smp), g in df[~df["flag_first_row"]].groupby(["ticker", "sample"]):
         on, intra, tot = (1 + g["overnight"]).prod(), (1 + g["intraday"]).prod(), (1 + g["ret"]).prod()
@@ -94,12 +86,8 @@ def cumulative_check(df):
         ["train", "validation", "test"]]
 
 
+# With no dividend or split, overnight must be open / previous close - 1
 def raw_gap_check(df):
-    """Independent check of overnight from raw prices on ordinary days.
-
-    With no dividend or split, overnight must equal open / previous close - 1.
-    Differences come only from rounding in Yahoo's Adj Close.
-    """
     d = df.copy()
     d["prev_close"] = d.groupby("ticker")["close"].shift()
     plain = ~d["flag_first_row"] & ~d["flag_ex_div"] & ~d["flag_split"]
@@ -108,12 +96,8 @@ def raw_gap_check(df):
         columns={"size": "days"})
 
 
+# Recompute a few dividend and split days by hand from unadjusted prices
 def hand_checks(df):
-    """Dividend and split days recomputed by hand from unadjusted prices.
-
-    total gross return = (close * split + dividend * split) / previous close   (CRSP convention,
-    dividend per pre-split share), price-only overnight = open * split / previous close.
-    """
     d = df.copy()
     d["prev_close"] = d.groupby("ticker")["close"].shift()
     picks = []
@@ -121,8 +105,10 @@ def hand_checks(df):
         ex = d[(d["ticker"] == t) & d["flag_ex_div"] & (d["sample"] != "test")]
         picks += [ex.index[0], ex.index[len(ex) // 2], ex.index[-1]]
     picks += list(d.index[d["flag_split"]])
+
     h = d.loc[picks, ["date", "ticker", "prev_close", "open", "close", "dividend", "split_factor",
                       "ret", "overnight", "intraday"]].copy()
+
     h["ret_by_hand"] = (h["close"] + h["dividend"]) * h["split_factor"] / h["prev_close"] - 1
     h["overnight_price_only"] = h["open"] * h["split_factor"] / h["prev_close"] - 1
     h["overnight_by_hand"] = (1 + h["ret_by_hand"]) / (h["close"] / h["open"]) - 1
@@ -146,6 +132,7 @@ def rf_check(df):
     examples = pd.concat([ordinary, weekend]).reset_index()
     examples["by_hand"] = (1 / (1 - examples["dtb3_prev"] / 100 * 91 / 360)) ** (examples["rf_days"] / 91) - 1
     examples["date"] = examples["date"].dt.date
+
     annual = (1 + s["rf"]).groupby(s.index.year).prod() - 1
     mean_dtb3 = s["dtb3_prev"].groupby(s.index.year).mean()
     years = pd.DataFrame({"compounded_rf": annual, "mean_dtb3_pct": mean_dtb3}).loc[[1995, 2000, 2008, 2015, 2023]]
@@ -200,6 +187,7 @@ def report(source="yfinance"):
            "- Sense check, rf compounded over a calendar year vs that year's average DTB3:", "",
            md_table(rf["years"], "{:.4f}"), ""]
     out += [NOTES]
+
     p = ROOT / "reports" / "step3_returns.md"
     p.write_text("\n".join(out))
     print(f"wrote {p.relative_to(ROOT)} and {path.relative_to(ROOT)}")

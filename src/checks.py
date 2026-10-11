@@ -1,12 +1,11 @@
-"""Step 2: clean-and-check the price panel, VIX and T-bill data.
+# Step 2: check the price panel, VIX and T-bill data
+#
+#     python src/checks.py           # yfinance
+#     python src/checks.py crsp
+#
+# Nothing is dropped. Each check returns the rows it flags and flag_panel adds
+# one flag column per issue, so later steps can choose what to exclude
 
-Nothing is dropped here. Each check returns the rows it flags, flag_panel() adds
-boolean flag columns to the panel so later steps can include or exclude them,
-and main() writes the flagged panel plus a markdown report:
-
-    python src/checks.py               # yfinance (default)
-    python src/checks.py crsp          # once CRSP data is in data/raw
-"""
 import sys
 
 import exchange_calendars as xc
@@ -16,15 +15,14 @@ import pandas as pd
 from config import PROCESSED, RAW, ROOT
 from data_layer import load_prices, split_legs
 
-EXTREME = 0.05     # |overnight| or |intraday| above this gets listed
-REVERSAL = 0.03    # both legs above this with opposite signs: possible bad open
-TOL = 1e-6         # relative tolerance for OHLC ordering
+EXTREME = 0.05   # list any leg that moves more than this
+REVERSAL = 0.03  # both legs past this in opposite directions, maybe a bad open
+TOL = 1e-6       # tolerance for OHLC ordering
 
 NYSE = xc.get_calendar("XNYS", start="1990-01-01")
 
-# Market events used to label large moves. Ranges cover volatile periods where
-# many large days are expected; single dates are specific news days and are
-# matched first.
+# Known events used to label big moves
+# Single days are news days and get matched before the longer volatile periods
 EVENTS = [
     ("1997-10-27", "1997-10-28", "Asian crisis mini-crash and rebound"),
     ("1998-08-31", "1998-08-31", "Russia default / LTCM sell-off"),
@@ -60,10 +58,10 @@ def sessions(start, end):
     return NYSE.sessions_in_range(start, end)
 
 
-# ---------- price panel checks -------------------------------------------------
+# Price panel checks
 
+# Per ticker, NYSE sessions with no row and rows on non-session dates
 def coverage(df):
-    """Per ticker: NYSE sessions with no row, and rows on non-session dates."""
     out = []
     for t, g in df.groupby("ticker"):
         cal = sessions(g["date"].min(), g["date"].max())
@@ -94,13 +92,13 @@ def ohlc_violations(df):
 
 def with_prev_close(df):
     df = split_legs(df)
-    # previous close in today's share units, so splits don't look like gaps
+    # previous close in today's share units so splits don't look like gaps
     df["prev_close"] = df.groupby("ticker")["close"].shift() / df["split_factor"]
     return df
 
 
+# Open equal to the previous close, usually a filled-in open rather than a trade
 def stale_opens(df):
-    """Open exactly equal to the previous close: usually a filled-in open, not a trade."""
     df = with_prev_close(df)
     return df[np.isclose(df["open"], df["prev_close"], rtol=0, atol=1e-9)]
 
@@ -117,8 +115,8 @@ def extreme_moves(df):
     return pd.DataFrame(rows).sort_values(["date", "ticker"]).reset_index(drop=True)
 
 
+# Big overnight move undone intraday or the reverse, typical of a bad open
 def reversals(df):
-    """Large overnight move undone intraday (or vice versa): the signature of a bad open."""
     df = with_prev_close(df)
     m = (df["overnight"] * df["intraday"] < 0) & (df["overnight"].abs() > REVERSAL) & (df["intraday"].abs() > REVERSAL)
     out = df.loc[m, ["date", "ticker", "prev_close", "open", "close", "overnight", "intraday", "ret"]].copy()
@@ -126,18 +124,15 @@ def reversals(df):
     return out
 
 
+# Is each dividend on its ex-date, and does the price drop show up in the open?
+# By construction it can only land overnight, so this checks the source data
 def dividend_checks(df):
-    """Does each dividend sit on its ex-date, and does the price drop show up overnight?
-
-    With intraday = close/open - 1 on same-day unadjusted prices, the dividend can only
-    land on the overnight leg. What can go wrong is the source: the dividend recorded
-    on the wrong day (ret - retx would be nonzero off the ex-date) or the open not
-    reflecting the ex-dividend price (the raw gap on ex-dates would not be lower).
-    """
     df = with_prev_close(df)
+
     df["div_yield"] = df["dividend"] / df["prev_close"]
     df["raw_gap"] = df["open"] / df["prev_close"] - 1
     ex = df["dividend"] > 0
+
     rows = []
     for t, g in df.groupby("ticker"):
         e, n = g[ex.loc[g.index]], g[~ex.loc[g.index]]
@@ -150,13 +145,14 @@ def dividend_checks(df):
             "mean_yield_ex": e["div_yield"].mean(),
             "mean_raw_gap_ex": e["raw_gap"].mean(),
             "mean_raw_gap_other": n["raw_gap"].mean(),
-            # share of the dividend visible in the open: 1 = full drop at the open
+            # share of the dividend seen in the open, 1 means the full drop
             "drop_share_at_open": (n["raw_gap"].mean() - e["raw_gap"].mean()) / e["div_yield"].mean(),
             "drop_share_se": e["raw_gap"].std() / np.sqrt(len(e)) / e["div_yield"].mean(),
             "mean_overnight_ex": e["overnight"].mean(),
             "mean_intraday_ex": e["intraday"].mean(),
             "mean_intraday_other": n["intraday"].mean(),
         })
+
     per_year = df[ex].groupby([df["ticker"], df["date"].dt.year.rename("year")]).size().unstack(0).fillna(0).astype(int)
     return pd.DataFrame(rows), per_year
 
@@ -175,8 +171,8 @@ def half_days(df):
     return pd.DatetimeIndex(early), summary
 
 
+# Panel with both legs and one boolean column per issue
 def flag_panel(df):
-    """Panel with overnight/intraday legs and one boolean column per issue."""
     df = with_prev_close(df)
     key = ["date", "ticker"]
     idx = pd.MultiIndex.from_frame(df[key])
@@ -186,6 +182,7 @@ def flag_panel(df):
 
     ext = extreme_moves(df.drop(columns=["overnight", "intraday", "prev_close"]))
     ext["date"] = pd.to_datetime(ext["date"])
+
     df["flag_stale_open"] = has(stale_opens(df[COLS]))
     df["flag_extreme"] = has(ext)
     df["flag_reversal"] = has(reversals(df[COLS]))
@@ -202,7 +199,7 @@ COLS = ["date", "ticker", "open", "high", "low", "close", "bid", "ask",
         "ret", "retx", "volume", "dividend", "split_factor"]
 
 
-# ---------- VIX and T-bill -----------------------------------------------------
+# VIX and T-bill
 
 def vix_checks(end):
     cboe = pd.read_parquet(RAW / "vix_cboe.parquet")
@@ -210,8 +207,10 @@ def vix_checks(end):
     cal = sessions(cboe.index.min(), end)
     both = cboe[["close"]].join(fred, how="inner")
     diff = (both["close"] - both["VIXCLS"]).abs()
+
     ohlc_bad = cboe[(cboe["high"] < cboe["low"]) | (cboe["open"] > cboe["high"]) | (cboe["open"] < cboe["low"])
                     | (cboe["close"] > cboe["high"]) | (cboe["close"] < cboe["low"])]
+
     return {
         "common_days": len(both),
         "max_abs_diff": diff.max(),
@@ -230,6 +229,7 @@ def tbill_checks(end):
     missing = cal.difference(tb.index)
     by_day = pd.Series([d.strftime("%m-%d") for d in missing]).value_counts()
     gaps = tb.index.to_series().diff().dt.days
+
     return {
         "obs": len(tb), "first": tb.index.min().date(), "last": tb.index.max().date(),
         "missing_sessions": missing, "missing_by_day": by_day,
@@ -238,13 +238,14 @@ def tbill_checks(end):
     }
 
 
-# ---------- report -------------------------------------------------------------
+# Report
 
 def md_table(df, floatfmt="{:.4f}"):
     if df.index.name is not None or isinstance(df.index, pd.MultiIndex):
         df = df.reset_index()
     head = "| " + " | ".join(map(str, df.columns)) + " |"
     sep = "|" + "---|" * len(df.columns)
+
     lines = [head, sep]
     for r in df.itertuples(index=False):
         cells = [floatfmt.format(v) if isinstance(v, (float, np.floating)) else str(v) for v in r]
@@ -260,6 +261,7 @@ def short_list(items, n=12):
 def report(source="yfinance"):
     df = load_prices(source)
     end = df["date"].max()
+
     flagged = flag_panel(df)
     PROCESSED.mkdir(parents=True, exist_ok=True)
     flagged.to_parquet(PROCESSED / f"prices_{source}_flagged.parquet", index=False)
@@ -328,6 +330,7 @@ def report(source="yfinance"):
             f"- Negative-rate days: {short_list(tb['negative_days'])}", ""]
 
     out += [DECISIONS]
+
     path = ROOT / "reports" / "step2_data_checks.md"
     path.parent.mkdir(exist_ok=True)
     path.write_text("\n".join(out))

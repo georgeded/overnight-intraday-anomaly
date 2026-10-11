@@ -1,25 +1,15 @@
-"""Step 5: hypothesis tests on the TRAIN sample only (1993-2012).
+# Step 5: hypothesis tests on the train sample only (1993-2012)
+#
+#     python src/hypothesis_tests.py          # yfinance
+#     python src/hypothesis_tests.py crsp
+#
+# H1  overnight vs intraday excess return, Newey-West t-test on the difference
+# H2  does today's intraday return, sig_b or VIX predict the next night
+# H3  SPY vs IWM, stacked regression with Driscoll-Kraay errors
+# H4  left for the test step
+#
+# Everything runs twice, with and without the step 2 flagged days
 
-    python src/hypothesis_tests.py            # yfinance (default)
-    python src/hypothesis_tests.py crsp
-
-Validation and test rows are dropped straight after loading, before anything is
-computed, and an assertion stops the run if any later date gets through.
-
-H1  mean overnight vs intraday excess return per ETF, Newey-West t-test on the
-    difference; full train sample and 1993-2007 vs 2008-2012
-H2  next night's overnight excess return on today's intraday return, the sig_b dummy
-    and VIX level (Newey-West), per ETF; the same regression with each of the other
-    candidate dummies in place of sig_b; mean overnight excess return with each
-    candidate signal on vs off
-H3  SPY vs IWM: difference in the H2 coefficients and on/off gaps, from a stacked
-    regression with Driscoll-Kraay standard errors (the two ETFs' errors on the same
-    night are strongly correlated, so they cannot be treated as independent)
-H4  deferred to the test step
-
-Everything runs twice: on all train days, and excluding days with a step 2 data
-quality flag.
-"""
 import sys
 
 import numpy as np
@@ -36,15 +26,14 @@ TRAIN_END = pd.Timestamp(SAMPLES["train"][1])
 SUBPERIODS = {"1993-2007": ("1993-01-01", "2007-12-31"), "2008-2012": ("2008-01-01", "2012-12-31")}
 BP = 1e4
 
-# Days dropped in the "excluding flagged days" run: data-quality issues and unusual
-# sessions. Ex-dividend days are kept: the dividend is a real part of the overnight
-# return, and dropping those days would remove it from the overnight mean.
+# Flags dropped in the clean run
+# Ex-dividend days stay since the dividend is part of the overnight return
 EXCLUDE_FLAGS = ["flag_stale_open", "flag_extreme", "flag_reversal", "flag_ohlc",
                  "flag_bad_price", "flag_half_day", "flag_split"]
 
 
+# Newey-West (1994) rule of thumb
 def nw_lags(n):
-    """Newey-West (1994) rule of thumb: floor(4 (n/100)^(2/9))."""
     return int(np.floor(4 * (n / 100) ** (2 / 9)))
 
 
@@ -57,15 +46,18 @@ def stars(p):
     return "***" if p < 0.01 else "**" if p < 0.05 else "*" if p < 0.1 else ""
 
 
-# ---------- data (train only) ---------------------------------------------------
+# Data, train only
 
 def load_train(source):
     ret = load_processed(f"returns_{source}")
     ret = ret[ret["date"] <= TRAIN_END].copy()
     sig = load_processed(f"signals_{source}")
     sig = sig[sig["trade_date"] <= TRAIN_END].copy()
+
+    # stop if anything after train gets through
     assert ret["date"].max() <= TRAIN_END and sig["trade_date"].max() <= TRAIN_END
     assert set(ret["sample"]) == {"train"} and set(sig["sample"]) == {"train"}
+
     ret["flagged"] = ret[EXCLUDE_FLAGS].any(axis=1)
     return ret, sig
 
@@ -75,31 +67,35 @@ def daily(ret, exclude):
     return d[~d["flagged"]] if exclude else d
 
 
+# One row per signal night, regressors from day t and the overnight return of t+1
 def nights(ret, sig, exclude):
-    """One row per signal night: regressors from day t, overnight excess return of t+1."""
     keep = ["date", "ticker", "overnight_xs", "overnight", "flagged"]
     nxt = ret[keep].rename(columns={"date": "trade_date", "flagged": "flagged_next"})
     today = ret[["date", "ticker", "flagged"]]
     n = sig.merge(nxt, on=["trade_date", "ticker"], how="inner").merge(today, on=["date", "ticker"], how="left")
+
     for c in SIGNALS:
-        n[c] = n[c].astype("Float64").astype(float)  # NA -> NaN, dropped per regression
+        n[c] = n[c].astype("Float64").astype(float)  # NA to NaN, dropped per regression
+
     if exclude:
-        # a signal day just before the loaded rows has no flag here: treat as unflagged
+        # a signal day before the loaded rows has no flag, count it as clean
         n = n[~(n["flagged"].astype("boolean").fillna(False).astype(bool) | n["flagged_next"])]
     return n
 
 
-# ---------- H1 ----------------------------------------------------------------
+# H1
 
 def h1(ret, exclude, periods=None):
     rows = []
     d = daily(ret, exclude)
     periods = periods or {"1993-2012": ("1993-01-01", "2012-12-31"), **SUBPERIODS}
+
     for t in ["SPY", "QQQ", "IWM"]:
         for name, (a, b) in periods.items():
             g = d[(d["ticker"] == t) & (d["date"] >= a) & (d["date"] <= b)]
             if len(g) < 100:
                 continue
+
             on, intra = g["overnight_xs"], g["intraday_xs"]
             res = {k: ols_nw(s.to_numpy(), np.empty((len(s), 0))) for k, s in
                    [("on", on), ("in", intra), ("diff", on - intra)]}
@@ -111,13 +107,14 @@ def h1(ret, exclude, periods=None):
                 "p_diff": res["diff"].pvalues[0],
                 "diff_ann_pct": (on - intra).mean() * 252 * 100,
             })
+
     out = pd.DataFrame(rows)
     out["sig"] = out["p_diff"].map(stars)
     return out
 
 
+# Is the gap different in 2008-2012 than in 1993-2007?
 def h1_subperiod_change(ret, exclude):
-    """Does the overnight-intraday gap differ between 1993-2007 and 2008-2012?"""
     d = daily(ret, exclude)
     rows = []
     for t in ["SPY", "QQQ", "IWM"]:
@@ -130,7 +127,7 @@ def h1_subperiod_change(ret, exclude):
     return pd.DataFrame(rows)
 
 
-# ---------- H2 ----------------------------------------------------------------
+# H2
 
 def h2_regression(n, dummy="sig_b"):
     rows, fits = [], {}
@@ -139,6 +136,7 @@ def h2_regression(n, dummy="sig_b"):
         X = g[["intraday", dummy, "vix"]].to_numpy()
         r = ols_nw(g["overnight_xs"].to_numpy(), X)
         fits[t] = r
+
         names = ["const", "intraday", dummy, "vix"]
         row = {"ticker": t, "nights": int(r.nobs), "r2_pct": r.rsquared * 100}
         for i, k in enumerate(names):
@@ -148,8 +146,8 @@ def h2_regression(n, dummy="sig_b"):
     return pd.DataFrame(rows), fits
 
 
+# Readable units: bp, bp per 1% intraday move, bp per VIX point
 def h2_main_table(tab, dummy="sig_b"):
-    """Readable units: constant and dummy in bp, intraday as bp per 1% intraday move, VIX bp per point."""
     out = pd.DataFrame({
         "ticker": tab["ticker"], "nights": tab["nights"],
         "const_bp": tab["const"] * BP, "t_const": tab["t_const"],
@@ -161,8 +159,8 @@ def h2_main_table(tab, dummy="sig_b"):
     return out
 
 
+# Coefficient on each candidate dummy, with intraday and VIX as controls
 def h2_dummies(n):
-    """Coefficient on each candidate dummy, with intraday and VIX as controls."""
     rows = []
     for s in SIGNALS:
         tab, _ = h2_regression(n, s)
@@ -179,32 +177,33 @@ def h2_on_off(n):
             g = n[n["ticker"] == t].dropna(subset=[s, "overnight_xs"])
             on = g[s] == 1
             r = ols_nw(g["overnight_xs"].to_numpy(), g[[s]].to_numpy())
+
             rows.append({"signal": s, "ticker": t, "nights_on": int(on.sum()), "nights_off": int((~on).sum()),
                          "mean_on_bp": g.loc[on, "overnight_xs"].mean() * BP,
                          "mean_off_bp": g.loc[~on, "overnight_xs"].mean() * BP,
                          "diff_bp": r.params[1] * BP, "t": r.tvalues[1], "p": r.pvalues[1]})
+
     out = pd.DataFrame(rows)
-    out["p_holm"] = multipletests(out["p"], method="holm")[1]  # across all 15 signal x ETF tests
+    out["p_holm"] = multipletests(out["p"], method="holm")[1]  # over all 15 tests
     out["sig"] = out["p"].map(stars)
     out["sig_holm"] = out["p_holm"].map(stars)
     return out
 
 
-# ---------- H3 ----------------------------------------------------------------
+# H3
 
+# Stack SPY and IWM on common nights, the IWM terms give the differences
+# Driscoll-Kraay errors allow both ETFs to move together on the same night
 def stacked_dk(n, regressors):
-    """Stack SPY and IWM on their common nights; IWM interactions give the differences.
-
-    Driscoll-Kraay standard errors (time-grouped Newey-West) allow the two ETFs'
-    errors on the same night to be correlated, and serial correlation across nights.
-    """
     g = n[n["ticker"].isin(["SPY", "IWM"])].dropna(subset=["overnight_xs"] + regressors)
     common = g.groupby("date")["ticker"].nunique()
     g = g[g["date"].isin(common[common == 2].index)].sort_values(["date", "ticker"])
+
     iwm = (g["ticker"] == "IWM").astype(float).to_numpy()
     X = np.column_stack([np.ones(len(g))] + [g[r].to_numpy() for r in regressors]
                         + [iwm] + [iwm * g[r].to_numpy() for r in regressors])
     names = ["const"] + regressors + ["IWM"] + [f"IWM x {r}" for r in regressors]
+
     time = pd.factorize(g["date"])[0]
     lags = nw_lags(len(common[common == 2]))
     r = sm.OLS(g["overnight_xs"].to_numpy(), X).fit(cov_type="hac-groupsum",
@@ -214,6 +213,7 @@ def stacked_dk(n, regressors):
 
 def h3(n):
     rows = []
+
     # the H2 regression
     regs = ["intraday", "sig_b", "vix"]
     r, names, nights_common = stacked_dk(n, regs)
@@ -223,26 +223,28 @@ def h3(n):
         rows.append({"test": "H2 regression", "coefficient": names[i].replace("IWM x ", "").replace("IWM", "const"),
                      "SPY": r.params[i - k] * scale[names[i]], "IWM - SPY": r.params[i] * scale[names[i]],
                      "t": r.tvalues[i], "p": r.pvalues[i], "nights": nights_common})
-    # joint Wald tests: the three slopes, and slopes plus intercept. The intercept and
-    # VIX differences are almost collinear, so the four-way test mostly picks up the
-    # gap in IWM's and SPY's average overnight return rather than different reactions.
+
+    # joint Wald tests on the three slopes, then slopes plus intercept
+    # the four-way test mostly picks up IWM's higher average return
     for label, idx in [("3 slopes jointly (Wald)", range(k + 1, 2 * k)), ("all 4 jointly (Wald)", range(k, 2 * k))]:
         R = np.zeros((len(idx), 2 * k))
         R[np.arange(len(idx)), list(idx)] = 1
         joint = r.wald_test(R, scalar=True)
         rows.append({"test": "H2 regression", "coefficient": label, "SPY": np.nan, "IWM - SPY": np.nan,
                      "t": np.nan, "p": float(joint.pvalue), "nights": nights_common})
-    # the on/off gap for every candidate
+
+    # on/off gap for every candidate
     for s in SIGNALS:
         r, names, nc = stacked_dk(n, [s])
         rows.append({"test": "on/off gap", "coefficient": s, "SPY": r.params[1] * BP,
                      "IWM - SPY": r.params[3] * BP, "t": r.tvalues[3], "p": r.pvalues[3], "nights": nc})
+
     out = pd.DataFrame(rows)
     out["sig"] = out["p"].map(stars)
     return out
 
 
-# ---------- report -------------------------------------------------------------
+# Report
 
 def run(ret, sig, exclude):
     n = nights(ret, sig, exclude)
@@ -286,6 +288,7 @@ def report(source="yfinance"):
     ret, sig = load_train(source)
     full, clean = run(ret, sig, False), run(ret, sig, True)
     lags = nw_lags(len(ret[ret["ticker"] == "SPY"]))
+
     out = [f"# Step 5: hypothesis tests ({source}, train sample only)", "",
            f"Generated by `python src/hypothesis_tests.py {source}`. Only rows dated up to {TRAIN_END.date()} are "
            "loaded (for H2 the night traded must also end by then); validation and test rows are never touched. "
@@ -303,6 +306,7 @@ def report(source="yfinance"):
     out += section(full, "A. All train days")
     out += section(clean, "B. Excluding step 2 flagged days")
     out += [NOTES]
+
     p = ROOT / "reports" / "step5_tests.md"
     p.write_text("\n".join(out))
     print(f"wrote {p.relative_to(ROOT)}")

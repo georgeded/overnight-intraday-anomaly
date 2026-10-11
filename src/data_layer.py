@@ -1,29 +1,22 @@
-"""One place that turns raw downloads into a standard daily price panel.
+# Turns raw downloads into one standard daily price panel
+#
+#     load_prices("yfinance")
+#     load_prices("crsp")      # same columns, not tested until WRDS access
+#
+# Columns, one row per ticker and trading day:
+#     date, ticker              trading day, ETF ticker
+#     open, high, low, close    unadjusted prices as traded
+#     bid, ask                  closing bid and ask (NaN for yfinance)
+#     ret                       close to close total return, dividends included
+#     retx                      close to close return without dividends
+#     volume                    shares traded, unadjusted
+#     dividend                  cash dividend per share on its ex-date, else 0
+#     split_factor              shares after / shares before on a split day, else 1
+#
+# Prices and ret are on the same basis, so a day splits cleanly into two legs:
+#     intraday  = close / open - 1
+#     overnight = (1 + ret) / (close / open) - 1
 
-    load_prices("yfinance")  # works now
-    load_prices("crsp")      # same schema, from download_wrds.py output (untested until WRDS access)
-
-Every source returns one row per ticker and trading day with these columns:
-
-    date, ticker              trading day (tz-naive), ETF ticker
-    open, high, low, close    unadjusted prices, as traded that day
-    bid, ask                  closing bid and ask (NaN for yfinance)
-    ret                       total return close to close, dividends included
-    retx                      return close to close without dividends (splits handled)
-    volume                    shares traded, unadjusted
-    dividend                  cash dividend per share, on its ex-date (0 otherwise)
-    split_factor              shares after / shares before on a split's ex-date (1 otherwise)
-
-Because ret and the prices are on the same unadjusted basis, the two legs of a day
-can be split consistently (see split_legs):
-
-    intraday  = close / open - 1
-    overnight = (1 + ret) / (close / open) - 1   # previous close to open, incl. dividend
-
-Processed tables go through save_processed / load_processed so later steps never
-touch file paths directly. load_tbill gives the raw 3-month T-bill rate, load_vix
-the VIX close per NYSE session.
-"""
 import numpy as np
 import pandas as pd
 
@@ -42,33 +35,32 @@ def load_prices(source="yfinance", tickers=TICKERS):
         df = _crsp(tickers)
     else:
         raise ValueError(f"source must be 'yfinance' or 'crsp', got {source!r}")
+
     return df[COLUMNS].sort_values(["ticker", "date"]).reset_index(drop=True)
 
 
+# Add overnight (previous close to open) and intraday (open to close) returns
 def split_legs(df):
-    """Add overnight (previous close to open) and intraday (open to close) returns."""
     df = df.copy()
     df["intraday"] = df["close"] / df["open"] - 1
     df["overnight"] = (1 + df["ret"]) / (df["close"] / df["open"]) - 1
     return df
 
 
+# FRED DTB3, annual % on a discount basis
 def load_tbill():
-    """FRED DTB3: 3-month T-bill, secondary market, annual % on a discount basis."""
     return pd.read_parquet(RAW / "tbill3m_fred.parquet")["DTB3"].dropna()
 
 
+# VIX close per NYSE session, CBOE first, then FRED, then the last close
+# CBOE open/high/low are unreliable before 2006 so only the close is used
 def load_vix():
-    """VIX close per NYSE session: CBOE, gaps filled from FRED, then the last close.
-
-    CBOE open/high/low are unreliable before 2006 and are not used. Rows on
-    market holidays (CBOE publishes some since 2022) are dropped.
-    """
     import exchange_calendars as xc
 
     cboe = pd.read_parquet(RAW / "vix_cboe.parquet")["close"]
     fred = pd.read_parquet(RAW / "vix_fred.parquet")["VIXCLS"].dropna()
     sessions = xc.get_calendar("XNYS", start="1990-01-01").sessions_in_range(cboe.index.min(), cboe.index.max())
+
     vix = cboe.reindex(sessions).fillna(fred.reindex(sessions)).ffill()
     vix.index.name = "date"
     return vix.rename("vix")
@@ -85,21 +77,20 @@ def load_processed(name):
     return pd.read_parquet(PROCESSED / f"{name}.parquet")
 
 
+# Yahoo prices are split-adjusted back in time, undo that so they match CRSP
+# Close is split-adjusted only and Adj Close also has dividends, so ret comes
+# from Adj Close and retx from Close
 def _yfinance(ticker):
-    """Yahoo prices come split-adjusted back in time; undo that so they match CRSP.
-
-    Yahoo's Close is adjusted for splits only and Adj Close for splits and dividends,
-    so ret comes from Adj Close and retx from Close (both give the same answer
-    whether or not the split adjustment is undone).
-    """
     raw = pd.read_parquet(RAW / f"yf_{ticker}.parquet").sort_index()
     split = raw["stock_splits"].replace(0, 1.0).fillna(1.0)
-    # shares-per-share factor still to come after each date: 2.0 before a 2:1 split, 1 after
+
+    # splits still to come after each date, e.g. 2.0 before a 2:1 split
     later = split[::-1].cumprod()[::-1].shift(-1, fill_value=1.0)
 
     df = pd.DataFrame({"date": raw.index, "ticker": ticker})
     for c in ["open", "high", "low", "close"]:
         df[c] = (raw[c] * later).to_numpy()
+
     df["bid"] = np.nan
     df["ask"] = np.nan
     df["ret"] = raw["adj_close"].pct_change(fill_method=None).to_numpy()
@@ -110,14 +101,10 @@ def _yfinance(ticker):
     return df
 
 
+# Legacy CRSP daily file (crsp.dsf) from download_wrds.py, not run on real data yet
+# prc, askhi and bidlo are negative when CRSP filled them from quotes, signs are
+# dropped here and checks.py flags those days
 def _crsp(tickers):
-    """Legacy CRSP daily stock file (crsp.dsf) as saved by download_wrds.py.
-
-    prc is negative when there was no closing trade and CRSP used the bid/ask
-    midpoint; askhi/bidlo are likewise negative when they hold the closing ask/bid
-    instead of the day's high/low. Signs are dropped here; the checks module flags
-    those days. Not yet run against real data.
-    """
     raw = pd.read_parquet(RAW / "crsp_dsf.parquet")
     names = {v: k for k, v in PERMNOS.items()}
     raw = raw[raw["permno"].isin([PERMNOS[t] for t in tickers])].copy()
@@ -134,10 +121,12 @@ def _crsp(tickers):
     df["ret"] = pd.to_numeric(raw["ret"], errors="coerce")
     df["retx"] = pd.to_numeric(raw["retx"], errors="coerce")
     df["volume"] = raw["vol"]
-    # cfacpr falls on a split's ex-date; the ratio gives the split for that day
+
+    # cfacpr changes on a split's ex-date, the ratio gives the split
     prev_cfac = raw.groupby("permno")["cfacpr"].shift()
     df["split_factor"] = (prev_cfac / raw["cfacpr"]).fillna(1.0)
-    # dsf carries no dividend amount; back it out of ret - retx and the previous close
+
+    # dsf has no dividend amount, back it out of ret - retx
     prev_close = df.groupby("ticker")["close"].shift()
     df["dividend"] = ((df["ret"] - df["retx"]) * prev_close / df["split_factor"]).fillna(0.0)
     df.loc[df["dividend"].abs() < 1e-6, "dividend"] = 0.0

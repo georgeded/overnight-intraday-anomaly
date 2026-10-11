@@ -1,8 +1,6 @@
-"""Download daily OHLCV, dividends and splits for the ETFs from Yahoo Finance.
+# Download daily OHLCV, dividends and splits for the ETFs from Yahoo Finance
+# Raw open and close are kept next to Adj Close so dividends can be handled by hand
 
-Raw (unadjusted) open and close are kept alongside Adj Close so overnight and
-intraday returns can be rebuilt with dividends handled explicitly.
-"""
 import time
 
 import yfinance as yf
@@ -25,11 +23,13 @@ def fetch(ticker, tries=4):
 
 def main():
     RAW.mkdir(parents=True, exist_ok=True)
+
     for t in TICKERS:
         df = fetch(t)
         df.index = df.index.tz_localize(None).normalize()
         df.index.name = "date"
         df.columns = [c.lower().replace(" ", "_") for c in df.columns]
+
         out = RAW / f"yf_{t}.parquet"
         df.to_parquet(out)
         print(f"{t}: {len(df)} rows {df.index.min().date()} to {df.index.max().date()} -> {out.name}")

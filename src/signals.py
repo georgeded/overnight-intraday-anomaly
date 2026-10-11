@@ -1,23 +1,19 @@
-"""Step 4: overnight signals, using only what is known at each day's close.
+# Step 4: overnight signals, using only what is known at each close
+#
+#     python src/signals.py          # yfinance
+#     python src/signals.py crsp
+#
+# A signal on day t decides whether to hold the ETF from t's close to the next open,
+# so it gets paired with the overnight return on the next row (trade_date)
+#
+#     sig_a   intraday(t) < 0
+#     sig_b   intraday(t) at or below the 20th percentile of the previous 252 days
+#     sig_c   VIX(t) above its median over the previous 252 days
+#     sig_ac  sig_a and sig_c
+#     sig_bc  sig_b and sig_c
+#
+# Signals stay NaN until a full 252 day window exists
 
-    python src/signals.py            # yfinance (default)
-    python src/signals.py crsp
-
-A signal dated t is computed at t's close and decides whether to hold the ETF over
-the night from t's close to the next session's open. That overnight return sits on
-the next row (trade_date), so step 5 must pair signal(t) with overnight(t+1).
-
-    sig_a  intraday(t) < 0
-    sig_b  intraday(t) <= 20th percentile of intraday over the previous 252 sessions (t-252..t-1)
-    sig_c  VIX close(t) > median VIX close over the previous 252 sessions (t-252..t-1)
-    sig_ac sig_a AND sig_c
-    sig_bc sig_b AND sig_c
-
-These five are the only candidates (combinations fixed on 16 Oct, before any returns
-were examined).
-
-Signals are NaN (not False) until a full 252-day window exists. No returns analysis here.
-"""
 import sys
 
 import numpy as np
@@ -31,38 +27,39 @@ from returns import sample_of
 WINDOW = 252
 PCT = 0.20
 SIGNALS = ["sig_a", "sig_b", "sig_c", "sig_ac", "sig_bc"]
-# compared in the look-ahead tests: the signals and the thresholds behind them
+# checked in the look-ahead tests, the signals plus their thresholds
 TESTED = SIGNALS + ["intraday_q20", "vix_median"]
 
 
+# Rolling statistic over the WINDOW values before each date
 def _past(series, fn, lag=1):
-    """Rolling statistic over the WINDOW values strictly before each date."""
     return fn(series.shift(lag).rolling(WINDOW, min_periods=WINDOW))
 
 
+# lag=1 is the real signal
+# lag=-1 peeks one day ahead on purpose, to show the tests catch leaks
 def compute_signals(ret, vix, lag=1):
-    """ret: panel with date, ticker, intraday. vix: VIX close indexed by NYSE session.
-
-    lag=1 is the real definition. lag=-1 is a deliberately leaky version (the window
-    reaches one day into the future), used only to show the shift test can catch leaks.
-    """
     out = []
     v = vix.sort_index()
     vix_med = _past(v, lambda r: r.median(), lag)
+
     for t, g in ret.sort_values("date").groupby("ticker"):
         g = g[["date", "ticker", "intraday"]].copy()
         intra = g["intraday"]
+
         g["intraday_q20"] = _past(intra, lambda r: r.quantile(PCT), lag).to_numpy()
         g["vix"] = v.reindex(g["date"]).to_numpy()
         g["vix_median"] = vix_med.reindex(g["date"]).to_numpy()
         g["trade_date"] = g["date"].shift(-1)  # night from date's close to trade_date's open
+
         g["sig_a"] = _bool(intra < 0, intra.notna())
         g["sig_b"] = _bool(intra <= g["intraday_q20"], g["intraday_q20"].notna() & intra.notna())
         g["sig_c"] = _bool(g["vix"] > g["vix_median"], g["vix_median"].notna() & g["vix"].notna())
-        # NA if either part is NA (not pandas' Kleene logic, where False & NA = False)
+        # NA if either side is NA, pandas would give False & NA = False
         g["sig_ac"] = _bool(g["sig_a"].fillna(False) & g["sig_c"].fillna(False), g["sig_a"].notna() & g["sig_c"].notna())
         g["sig_bc"] = _bool(g["sig_b"].fillna(False) & g["sig_c"].fillna(False), g["sig_b"].notna() & g["sig_c"].notna())
         out.append(g)
+
     return pd.concat(out, ignore_index=True)
 
 
@@ -70,16 +67,16 @@ def _bool(cond, valid):
     return cond.astype("boolean").where(valid, pd.NA)
 
 
-# ---------- look-ahead tests ---------------------------------------------------
+# Look-ahead tests
 
+# Element-wise equal, with NA == NA counted as equal
 def _same(a, b):
-    """Signals equal element-wise, treating NA == NA as equal."""
     a, b = a.reset_index(drop=True), b.reset_index(drop=True)
     return bool(((a == b).fillna(False) | (a.isna() & b.isna())).all())
 
 
+# Cut the data at T and recompute, signals up to T must not change
 def truncation_test(ret, vix, cutoffs, lag=1):
-    """Recompute with data cut at T: signals up to T must not change."""
     full = compute_signals(ret, vix, lag).set_index(["date", "ticker"]).sort_index()
     bad = []
     for T in cutoffs:
@@ -90,8 +87,8 @@ def truncation_test(ret, vix, cutoffs, lag=1):
     return bad
 
 
+# Replace everything after T with noise, signals up to T must not change
 def perturbation_test(ret, vix, cutoffs, seed=0, lag=1):
-    """Replace everything after T with noise: signals up to T must not change."""
     rng = np.random.default_rng(seed)
     full = compute_signals(ret, vix, lag)
     bad = []
@@ -107,14 +104,16 @@ def perturbation_test(ret, vix, cutoffs, seed=0, lag=1):
     return bad
 
 
+# trade_date is the next session and windows hold exactly 252 past days
 def timing_checks(sig, ret):
-    """trade_date is always the ETF's next session, and windows hold exactly 252 past days."""
     nxt = ret.sort_values("date").groupby("ticker")["date"].shift(-1)
     nxt.index = ret.sort_values("date").index
     merged = sig.merge(ret[["date", "ticker"]].assign(next_session=nxt), on=["date", "ticker"])
+
     ok_next = (merged["trade_date"].isna() & merged["next_session"].isna()) | (merged["trade_date"] == merged["next_session"])
     first_b = sig[sig["sig_b"].notna()].groupby("ticker")["date"].min()
     first_rows = ret.groupby("ticker")["date"].apply(lambda d: d.sort_values().iloc[WINDOW])
+
     return {
         "trade_after_signal": bool((sig["trade_date"].dropna() > sig.loc[sig["trade_date"].notna(), "date"]).all()),
         "trade_is_next_session": bool(ok_next.all()),
@@ -124,13 +123,15 @@ def timing_checks(sig, ret):
     }
 
 
+# Recompute one day by hand from the raw windows
 def manual_check(sig, ret, vix, ticker="SPY", date="2008-10-15"):
-    """Recompute one day by hand from the raw windows."""
     g = ret[ret["ticker"] == ticker].sort_values("date").reset_index(drop=True)
     i = g.index[g["date"] == date][0]
     win = g["intraday"].iloc[i - WINDOW:i]
+
     vi = vix.index.get_loc(pd.Timestamp(date))
     vwin = vix.iloc[vi - WINDOW:vi]
+
     row = sig[(sig["ticker"] == ticker) & (sig["date"] == date)].iloc[0]
     return pd.DataFrame([
         {"item": "intraday(t)", "by_hand": g["intraday"].iloc[i], "stored": row["intraday"]},
@@ -143,10 +144,10 @@ def manual_check(sig, ret, vix, ticker="SPY", date="2008-10-15"):
     ])
 
 
-# ---------- frequency ----------------------------------------------------------
+# How often signals fire
 
+# Share of nights each signal fires, by year
 def frequency(sig):
-    """Share of nights each signal fires, per calendar year of the signal date."""
     s = sig.assign(year=sig["date"].dt.year)
     share = s.groupby(["year", "ticker"])[SIGNALS].mean().unstack("ticker")
     share.columns = [f"{t} {c[4:]}" for c, t in share.columns]
@@ -162,19 +163,20 @@ def counts_by_sample(sig):
             r[f"{c} fired"] = int(g[c].sum())
             r[f"{c} share"] = g[c].mean()
         rows.append(r)
+
     order = {"train": 0, "validation": 1, "test": 2}
     return pd.DataFrame(rows).sort_values(["sample", "ticker"], key=lambda c: c.map(order) if c.name == "sample" else c)
 
 
-# ---------- report -------------------------------------------------------------
+# Report
 
 def report(source="yfinance"):
     ret = load_processed(f"returns_{source}")
     vix = load_vix()
     vix = vix[vix.index <= ret["date"].max()]
     sig = compute_signals(ret, vix)
-    sig = sig[sig["trade_date"].notna()].reset_index(drop=True)  # last day has no next night in sample
-    sig["sample"] = sample_of(sig["trade_date"])  # the sample of the night being traded
+    sig = sig[sig["trade_date"].notna()].reset_index(drop=True)  # last day has no next night
+    sig["sample"] = sample_of(sig["trade_date"])  # sample of the night traded
     path = save_processed(sig, f"signals_{source}")
 
     rng = np.random.default_rng(42)
@@ -182,10 +184,12 @@ def report(source="yfinance"):
     dates = dates[dates > dates.iloc[WINDOW + 30]]
     cutoffs = sorted(set(pd.to_datetime(rng.choice(dates.to_numpy(), 20, replace=False)))
                      | {pd.Timestamp("2012-12-31"), pd.Timestamp("2018-12-31")})
+
     trunc = truncation_test(ret, vix, cutoffs)
     pert = perturbation_test(ret, vix, cutoffs)
     leak_trunc = truncation_test(ret, vix, cutoffs, lag=-1)
     leak_pert = perturbation_test(ret, vix, cutoffs, lag=-1)
+
     timing = timing_checks(sig, ret)
     hand = manual_check(sig, ret, vix)
     freq = frequency(sig)
@@ -238,6 +242,7 @@ def report(source="yfinance"):
            md_table(freq.rename_axis("year"), "{:.2f}"), "",
            "By sample:", "", md_table(counts, "{:.3f}"), "",
            NOTES]
+
     p = ROOT / "reports" / "step4_signals.md"
     p.write_text("\n".join(out))
     print(f"wrote {p.relative_to(ROOT)} and {path.relative_to(ROOT)}")

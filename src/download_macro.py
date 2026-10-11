@@ -1,4 +1,5 @@
-"""Download VIX (CBOE, with FRED as a check) and the 3-month T-bill rate (FRED)."""
+# Download VIX (CBOE, FRED as a check) and the 3-month T-bill rate (FRED)
+
 import pandas as pd
 
 from config import RAW, START

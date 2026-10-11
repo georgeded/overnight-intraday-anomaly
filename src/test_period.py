@@ -1,16 +1,11 @@
-"""Step 8: the final test on 2019-01-01 to 2026-10-02, run once with everything frozen.
+# Step 8: final test on 2019-2026, run once with everything frozen
+#
+#     python src/test_period.py run       # compute once and save the results
+#     python src/test_period.py report    # write the report from the saved results
+#
+# Frozen: the chosen signal, the step 6 engine and costs, the step 5 test code
+# H4 repeats H1 and the H2 regression on 2019-2020 and 2021+ against train
 
-    python src/test_period.py run       # computes everything once, saves the results
-    python src/test_period.py report    # renders reports/step8_test.md from the saved results
-
-Frozen inputs: config.CHOSEN_SIGNAL (picked in step 7), the step 6 engine and cost
-grid, the step 5 test code. The computation and the write-up are split so the
-report text can be written after the run without recomputing anything.
-
-Backtests per ETF: buy-and-hold, always intraday, always overnight, the chosen
-signal and its random-night placebo, for the whole test period, 2019-2020 and 2021+.
-H4: the H1 test and the H2 regression on 2019-2020 and 2021+, compared with train.
-"""
 import pickle
 import subprocess
 import sys
@@ -33,38 +28,43 @@ RESULTS = PROCESSED / "step8_results.pkl"
 STRATS = ["buy_hold", "intraday", "overnight", f"on_{CHOSEN_SIGNAL}"]
 
 
+# Returns and signals for one sample, with the step 5 flag column
 def load_sample_rows(source, sample, periods):
-    """Returns and signal rows of one sample, with the step 5 flag column."""
     ret = load_processed(f"returns_{source}")
     ret = ret[ret["sample"] == sample].copy()
     sig = load_processed(f"signals_{source}")
     sig = sig[sig["sample"] == sample].copy()
     ret["flagged"] = ret[EXCLUDE_FLAGS].any(axis=1)
+
     lo = min(pd.Timestamp(a) for a, _ in periods.values())
     hi = max(pd.Timestamp(b) for _, b in periods.values())
     assert ret["date"].min() >= lo and ret["date"].max() <= hi
     return ret, sig
 
 
-# ---------- H4 ----------------------------------------------------------------
+# H4
 
+# Gap in each period minus the train gap, Newey-West on the stacked series
 def h1_change_vs_train(train, test, exclude, periods):
-    """Overnight-intraday gap in each period minus the train gap (Newey-West on the stacked series)."""
     rows = []
     for t in TICKERS:
         a = daily(train, exclude)
         b = daily(test, exclude)
         g = pd.concat([a[a["ticker"] == t], b[b["ticker"] == t]]).sort_values("date")
         y = (g["overnight_xs"] - g["intraday_xs"]).to_numpy()
+
         dummies = np.column_stack([((g["date"] >= p0) & (g["date"] <= p1)).to_numpy(float)
                                    for p0, p1 in periods.values()])
         X = sm.add_constant(dummies)
         r = sm.OLS(y, X).fit(cov_type="HAC", cov_kwds={"maxlags": nw_lags(len(y))})
+
         row = {"ticker": t, "train_gap_bp": r.params[0] * BP}
         for i, name in enumerate(periods, start=1):
             row[f"{name} minus train_bp"] = r.params[i] * BP
             row[f"t ({name})"] = r.tvalues[i]
             row[f"p ({name})"] = r.pvalues[i]
+
+        # 2021+ against 2019-2020
         c = np.zeros(len(r.params))
         c[1], c[2] = -1, 1
         w = r.t_test(c)
@@ -80,15 +80,16 @@ def h2_by_period(n_train, n_test, periods):
             (p, n_test[(n_test["trade_date"] >= a) & (n_test["trade_date"] <= b)]) for p, (a, b) in periods.items()]:
         tab, _ = h2_regression(n)
         rows.append(h2_main_table(tab).assign(period=name))
+
     out = pd.concat(rows, ignore_index=True)
     out["ticker"] = pd.Categorical(out["ticker"], TICKERS, ordered=True)
-    out = out.sort_values("ticker", kind="stable")  # train first, then the periods, per ETF
+    out = out.sort_values("ticker", kind="stable")  # per ETF, train first
     out["ticker"] = out["ticker"].astype(str)
     return out[["period"] + [c for c in out.columns if c != "period"]]
 
 
+# Pooled train plus period regression, Wald test that the slopes match train
 def h2_change_vs_train(n_train, n_test, periods):
-    """Pooled train + period regression with period interactions; Wald test that the three slopes equal train's."""
     regs = ["intraday", "sig_b", "vix"]
     rows = []
     for t in TICKERS:
@@ -96,8 +97,10 @@ def h2_change_vs_train(n_train, n_test, periods):
             p = n_test[(n_test["ticker"] == t) & (n_test["trade_date"] >= a) & (n_test["trade_date"] <= b)]
             g = pd.concat([n_train[n_train["ticker"] == t].assign(post=0.0), p.assign(post=1.0)])
             g = g.dropna(subset=["overnight_xs"] + regs).sort_values("trade_date")
+
             X = np.column_stack([np.ones(len(g))] + [g[r] for r in regs] + [g["post"]] + [g["post"] * g[r] for r in regs])
             r = sm.OLS(g["overnight_xs"].to_numpy(), X).fit(cov_type="HAC", cov_kwds={"maxlags": nw_lags(len(g))})
+
             R = np.zeros((3, 8))
             R[[0, 1, 2], [5, 6, 7]] = 1
             w = r.wald_test(R, scalar=True)
@@ -106,18 +109,20 @@ def h2_change_vs_train(n_train, n_test, periods):
                          "d_sig_b_bp": r.params[6] * BP, "t_sig_b": r.tvalues[6],
                          "d_vix (bp per point)": r.params[7] * BP, "t_vix": r.tvalues[7],
                          "p (3 slopes = train)": float(w.pvalue)})
+
     out = pd.DataFrame(rows)
     out["sig"] = out["p (3 slopes = train)"].map(stars)
     return out
 
 
-# ---------- run once ----------------------------------------------------------
+# Run once
 
 def compute(source="yfinance", sample=SAMPLE, periods=PERIODS, h4_periods=H4_PERIODS, out=RESULTS):
     res = {"source": source, "sample": sample, "signal": CHOSEN_SIGNAL, "periods": periods,
            "run_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
            "commit": subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
                                     cwd=ROOT).stdout.strip()}
+
     ret, sig = load_sample(source, sample)
     res["engine_check"] = check_engine(ret, sig, sample)
     res["backtest"] = {p: backtest(source, sample, [CHOSEN_SIGNAL], w) for p, w in periods.items()}
@@ -134,6 +139,7 @@ def compute(source="yfinance", sample=SAMPLE, periods=PERIODS, h4_periods=H4_PER
             "h2_change": h2_change_vs_train(n_train, n_test, h4_periods),
         }
     res["h4"] = h4
+
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "wb") as f:
         pickle.dump(res, f)
@@ -141,7 +147,7 @@ def compute(source="yfinance", sample=SAMPLE, periods=PERIODS, h4_periods=H4_PER
     return res
 
 
-# ---------- report -------------------------------------------------------------
+# Report
 
 def bt_section(perf, be, plc, win):
     cols = ["strategy", "cum_ret_%", "ann_ret_%", "sharpe", "max_dd_%", "nights_in_%", "trades_per_yr"]
@@ -154,6 +160,7 @@ def bt_section(perf, be, plc, win):
             rows.append(p[cols].assign(cost=c))
         tab = pd.concat(rows)
         out += [md_table(tab[["cost"] + cols], "{:.2f}"), ""]
+
     be_tab = be.pivot(index="strategy", columns="ticker",
                       values=["breakeven_vs_cash_bp", "breakeven_vs_buy_hold_bp"]).pipe(_flat).loc[STRATS[1:]]
     out += ["Breakeven cost per trade (bp; `-` = below the benchmark even at zero cost):", "",
@@ -179,6 +186,7 @@ def h4_section(h, label):
 def render(path=RESULTS, report=ROOT / "reports" / "step8_test.md", notes=""):
     with open(path, "rb") as f:
         res = pickle.load(f)
+
     a, b = res["periods"][next(iter(res["periods"]))]
     out = [f"# Step 8: final test ({res['source']}, {a} to {b})", "",
            f"Computed once by `python src/test_period.py run` at {res['run_utc']} UTC on commit `{res['commit']}`; "
@@ -198,6 +206,7 @@ def render(path=RESULTS, report=ROOT / "reports" / "step8_test.md", notes=""):
             "Significance: * 10%, ** 5%, *** 1%.", ""]
     out += h4_section(res["h4"][False], "All days")
     out += h4_section(res["h4"][True], "Excluding flagged days")
+
     report.write_text("\n".join(out))
     print(f"wrote {report.relative_to(ROOT) if report.is_relative_to(ROOT) else report}")
 
@@ -251,6 +260,8 @@ re-run once CRSP is available, without changing anything else.
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "report"
+
+    # the test runs once, refuse to overwrite saved results
     if cmd == "run":
         if RESULTS.exists():
             raise SystemExit(f"{RESULTS.name} already exists: the test is run once. Delete it only on purpose.")

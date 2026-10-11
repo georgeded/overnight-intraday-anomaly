@@ -1,27 +1,18 @@
-"""Step 6: backtest engine, run on the TRAIN sample only (1993-2012).
+# Step 6: backtest engine, run on the train sample only (1993-2012)
+#
+#     python src/backtest.py          # yfinance
+#     python src/backtest.py crsp
+#
+# Each day has an overnight leg and an intraday leg, and every leg is either
+# fully in the ETF or in cash. Cash earns the T-bill rate overnight only.
+# Every change of position is a trade, so holding one night costs two trades.
+#
+#     buy_hold      in on every leg
+#     intraday      in on intraday legs, cash overnight
+#     overnight     in on overnight legs, cash intraday
+#     on_<signal>   hold the night when yesterday's signal is on
+#     placebo       1000 random sets of nights, same count as the signal
 
-    python src/backtest.py            # yfinance (default)
-    python src/backtest.py crsp
-
-Each trading day d is two legs: overnight (close d-1 -> open d) and intraday
-(open d -> close d). A strategy is a 0/1 position for every leg: fully in the ETF
-or fully in cash, no leverage. Cash earns the T-bill rate, which (as decided in
-step 4) accrues on the overnight leg only, so cash intraday earns nothing.
-
-A trade happens wherever the position changes between consecutive legs, including
-the entry at the start and the exit at the end. Each trade costs c (one-way, a
-fraction of the position), so holding one night is two trades.
-
-Strategies per ETF:
-    buy_hold        in the ETF on every leg
-    intraday        in on every intraday leg, cash overnight
-    overnight       in on every overnight leg, cash intraday
-    on_<signal>     overnight leg of day d held if signal(d-1) is on (5 signals)
-    placebo         1,000 random sets of nights, same count as each signal
-
-All strategies for an ETF share one window: from the close of the first day on which
-all five signals are defined to 2012-12-31, so they are comparable.
-"""
 import sys
 
 import numpy as np
@@ -39,25 +30,22 @@ SPREAD_WINDOW = 21  # days averaged in the Corwin-Schultz estimate
 TICKERS = ["SPY", "QQQ", "IWM"]
 
 
-# ---------- data -----------------------------------------------------------------
+# Data
 
+# "all" is the whole data set, only used for robustness checks
 def _bounds(sample):
-    """Date range of a sample; "all" is the whole data set (robustness checks only)."""
     return (SAMPLES["train"][0], END) if sample == "all" else SAMPLES[sample]
 
 
+# Rows up to the end of the sample, nothing later is loaded
+# Earlier rows only warm up the spread estimate
 def load_sample(source, sample="train"):
-    """Rows up to the end of `sample`; nothing later is ever loaded.
-
-    Earlier rows are kept only so the backward-looking spread estimate has history
-    at the start of the window; strategies are evaluated on `sample` rows only
-    (see legs).
-    """
     end = pd.Timestamp(_bounds(sample)[1])
     ret = load_processed(f"returns_{source}")
     ret = ret[ret["date"] <= end].copy()
     sig = load_processed(f"signals_{source}")
     sig = sig[sig["trade_date"] <= end].copy()
+
     assert ret["date"].max() <= end and sig["trade_date"].max() <= end
     if sample not in ("test", "all"):
         assert "test" not in set(ret["sample"]) | set(sig["sample"])
@@ -70,78 +58,74 @@ def load_train(source):
     return ret, sig
 
 
+# One-way cost per day, half the Corwin-Schultz (2012) high-low spread
+# Negative estimates are set to zero and only past days are averaged
 def corwin_schultz(g):
-    """One-way cost per day (half the estimated spread) from daily high and low.
-
-    Corwin and Schultz (2012) two-day estimator, with their overnight-gap adjustment
-    and negative two-day estimates set to zero, averaged over the previous
-    SPREAD_WINDOW days (only past data). Prices from the day before a split are put
-    in today's share units first.
-    """
     h, l, c = g["high"].to_numpy(), g["low"].to_numpy(), g["close"].to_numpy()
     split = g["split_factor"].to_numpy()
     ph, pl, pc = (np.roll(x, 1) / split for x in (h, l, c))
-    # overnight-gap adjustment of today's range
+
+    # adjust today's range for the overnight gap
     up = np.where(l > pc, l - pc, 0.0)
     down = np.where(h < pc, pc - h, 0.0)
     h2, l2 = h - up + down, l - up + down
+
     k = 3 - 2 * np.sqrt(2)
     beta = np.log(h2 / l2) ** 2 + np.log(ph / pl) ** 2
     gamma = np.log(np.maximum(h2, ph) / np.minimum(l2, pl)) ** 2
     alpha = (np.sqrt(2 * beta) - np.sqrt(beta)) / k - np.sqrt(gamma / k)
     s = np.maximum(2 * (np.exp(alpha) - 1) / (1 + np.exp(alpha)), 0.0)
     s[0] = np.nan
+
     spread = pd.Series(s, index=g.index).rolling(SPREAD_WINDOW, min_periods=5).mean().shift(1)
     return spread / 2
 
 
+# One-way cost from the closing bid and ask (CRSP), known at the previous close
 def quoted_half_spread(g):
-    """One-way cost from the closing bid and ask (CRSP), known at the previous close."""
     mid = (g["bid"] + g["ask"]) / 2
     return ((g["ask"] - g["bid"]) / 2 / mid).where(mid > 0).shift(1)
 
 
+# Daily frame for one ETF over its common window inside the sample
+# window can cut it further, the spread is computed before cutting
 def legs(ret, sig, ticker, sample="train", window=None):
-    """Per-day frame for one ETF over its common window inside `sample`.
-
-    window: optional (start, end) to cut the frame further, e.g. a sub-period. The
-    spread estimate is computed before cutting, so it keeps its history.
-    """
     g = ret[ret["ticker"] == ticker].sort_values("date").reset_index(drop=True)
     has_bidask = g["bid"].notna().any() and g["ask"].notna().any()
     g["cost_spread"] = quoted_half_spread(g) if has_bidask else corwin_schultz(g)
     spread_source = "closing bid/ask" if has_bidask else "Corwin-Schultz"
+
     s = sig[sig["ticker"] == ticker].set_index("trade_date")[SIGNALS]
     for c in SIGNALS:
-        g[c] = s[c].reindex(g["date"]).to_numpy()  # signal from the previous close, for tonight's leg
+        g[c] = s[c].reindex(g["date"]).to_numpy()  # signal from the previous close
+
     start = max(g.loc[g[SIGNALS].notna().all(axis=1), "date"].min(), pd.Timestamp(_bounds(sample)[0]))
     g = g[g["date"] >= start].reset_index(drop=True)
     if window is not None:
         g = g[(g["date"] >= window[0]) & (g["date"] <= window[1])].reset_index(drop=True)
+
     assert sample == "all" or set(g["sample"]) == {sample}
     assert g[SIGNALS].notna().all().all()
+
     for c in SIGNALS:
         g[c] = g[c].astype(bool)
     g["cost_spread"] = g["cost_spread"].ffill().bfill()
     return g, spread_source
 
 
-# ---------- engine -------------------------------------------------------------
+# Engine
 
+# Daily returns of a strategy
+# pos_on and pos_in are 0/1 per day, cost is one-way per trade (number or daily array)
 def run(g, pos_on, pos_in, cost):
-    """Daily returns of a strategy.
-
-    pos_on, pos_in: 0/1 arrays (overnight, intraday leg of each day).
-    cost: one-way cost per trade, scalar or per-day array (trades on day d use the
-    estimate known at the close of d-1).
-    """
     pos_on, pos_in = np.asarray(pos_on, float), np.asarray(pos_in, float)
     n = len(g)
     cost = np.broadcast_to(np.asarray(cost, float), (n,))
-    # leg sequence: on_0, in_0, on_1, in_1, ... with flat before and after
+
+    # legs in order on_0, in_0, on_1, in_1 ... starting and ending flat
     seq = np.empty(2 * n)
     seq[0::2], seq[1::2] = pos_on, pos_in
-    changes = np.abs(np.diff(np.concatenate([[0.0], seq, [0.0]])))  # before each leg, plus the final exit
+    changes = np.abs(np.diff(np.concatenate([[0.0], seq, [0.0]])))  # before each leg plus the final exit
     trade_on, trade_in = changes[0:2 * n:2], changes[1:2 * n:2]
     exit_end = changes[-1]
 
@@ -149,6 +133,7 @@ def run(g, pos_on, pos_in, cost):
     intra = np.where(pos_in == 1, g["intraday"].to_numpy(), g["rf_intraday"].to_numpy())
     gross = (1 - cost * trade_on) * (1 + on) * (1 - cost * trade_in) * (1 + intra)
     gross[-1] *= 1 - cost[-1] * exit_end
+
     trades = trade_on.sum() + trade_in.sum() + exit_end
     return gross - 1, trades
 
@@ -157,6 +142,7 @@ def metrics(daily, rf, trades, nights_in, years):
     eq = np.cumprod(1 + daily)
     xs = daily - rf
     dd = eq / np.maximum.accumulate(np.concatenate([[1.0], eq]))[1:] - 1
+
     return {
         "cum_ret_%": (eq[-1] - 1) * 100,
         "ann_ret_%": (eq[-1] ** (1 / years) - 1) * 100,
@@ -171,6 +157,7 @@ def strategies(g, signals=SIGNALS):
     n = len(g)
     one, zero = np.ones(n), np.zeros(n)
     out = {"buy_hold": (one, one), "intraday": (zero, one), "overnight": (one, zero)}
+
     for s in signals:
         out[f"on_{s}"] = (g[s].to_numpy().astype(float), zero)
     return out
@@ -186,8 +173,8 @@ def evaluate(g, name, pos_on, pos_in, cost, cost_label):
     return {"strategy": name, "cost": cost_label, **m}
 
 
+# Cost per trade (bp) where the annual return falls to target_ann, by bisection
 def breakeven(g, pos_on, pos_in, target_ann):
-    """Per-trade cost (bp) at which annual return falls to target_ann (bisection)."""
     yrs = years_of(g)
 
     def ann(c):
@@ -196,23 +183,26 @@ def breakeven(g, pos_on, pos_in, target_ann):
 
     if ann(0) <= target_ann:
         return np.nan  # worse than the benchmark even with no costs
+
     lo, hi = 0.0, 1.0
     while ann(hi) > target_ann and hi < 1e4:
         hi *= 2
+
     for _ in range(60):
         mid = (lo + hi) / 2
         lo, hi = (mid, hi) if ann(mid) > target_ann else (lo, mid)
     return (lo + hi) / 2
 
 
+# Random sets of nights with the same count as the signal
 def placebo(g, signal, cost, rng):
-    """Random sets of overnight legs with the signal's count; returns (ann_ret, sharpe) arrays."""
     n = len(g)
     k = int(g[signal].sum())
     cost = np.broadcast_to(np.asarray(cost, float), (n,))
     on, rf_on = g["overnight"].to_numpy(), g["rf_overnight"].to_numpy()
     rf = g["rf"].to_numpy()
     yrs = years_of(g)
+
     ann, sharpe = np.empty(N_PLACEBO), np.empty(N_PLACEBO)
     for i in range(N_PLACEBO):
         pos = np.zeros(n)
@@ -224,26 +214,24 @@ def placebo(g, signal, cost, rng):
     return ann, sharpe
 
 
+# Faster run() for overnight-only strategies, every held night is two trades
 def run_overnight_only(pos, on, rf_on, cost):
-    """Fast path of run() for strategies that are only ever in on overnight legs.
-
-    Every held night is a separate round trip (bought at the close, sold at the
-    next open), so the trade count is exactly two per night.
-    """
     gross = np.where(pos == 1, (1 - cost) ** 2 * (1 + on), 1 + rf_on)
     return gross - 1, 2 * pos.sum()
 
 
-# ---------- report -------------------------------------------------------------
+# Report
 
+# All strategies on one sample, or a window inside it
 def backtest(source="yfinance", sample="train", signals=SIGNALS, window=None):
-    """All strategies for `signals` on `sample` (optionally a sub-window of it)."""
     ret, sig = load_sample(source, sample)
     rng = np.random.default_rng(2026)
     perf, be, plc, windows, spread_by_year = [], [], [], [], []
+
     for t in TICKERS:
         g, spread_src = legs(ret, sig, t, sample, window)
         yrs = years_of(g)
+
         windows.append({"ticker": t, "first_day": g["date"].min().date(), "last_day": g["date"].max().date(),
                         "days": len(g), "years": yrs,
                         "mean_spread_cost_bp": g["cost_spread"].mean() * 1e4,
@@ -253,7 +241,8 @@ def backtest(source="yfinance", sample="train", signals=SIGNALS, window=None):
             for c in COSTS_BP:
                 perf.append({"ticker": t, **evaluate(g, name, p_on, p_in, c / 1e4, f"{c} bp")})
             perf.append({"ticker": t, **evaluate(g, name, p_on, p_in, g["cost_spread"].to_numpy(), "spread est.")})
-        # breakeven: vs cash (T-bill) and vs buy-and-hold, both at zero cost for the benchmark
+
+        # breakeven against cash and against buy-and-hold at zero cost
         cash_ann = np.prod(1 + g["rf"].to_numpy()) ** (1 / yrs) - 1
         bh_ann = np.prod(1 + run(g, *strats["buy_hold"], 0.0)[0]) ** (1 / yrs) - 1
         for name, (p_on, p_in) in strats.items():
@@ -262,8 +251,8 @@ def backtest(source="yfinance", sample="train", signals=SIGNALS, window=None):
             be.append({"ticker": t, "strategy": name,
                        "breakeven_vs_cash_bp": breakeven(g, p_on, p_in, cash_ann),
                        "breakeven_vs_buy_hold_bp": breakeven(g, p_on, p_in, bh_ann)})
-        # placebo at zero cost: with a flat cost every draw pays the same per night, so the
-        # ranking of annual returns is unchanged at any flat cost level
+
+        # placebo at zero cost, a flat cost hits every draw the same so the ranking holds
         spread_by_year.append(g.groupby(g["date"].dt.year)["cost_spread"].mean().rename(t) * 1e4)
         for s in signals:
             for cost, label in [(0.0, "0 bp")]:
@@ -278,23 +267,28 @@ def backtest(source="yfinance", sample="train", signals=SIGNALS, window=None):
                             "sharpe": real_sh, "placebo_median_sharpe": np.median(p_sh),
                             "placebo_5_95_sharpe": f"{np.percentile(p_sh, 5):.2f} / {np.percentile(p_sh, 95):.2f}",
                             "sharpe_percentile": (p_sh < real_sh).mean() * 100})
+
     spread_tab = pd.concat(spread_by_year, axis=1).rename_axis("year")
     return pd.DataFrame(perf), pd.DataFrame(be), pd.DataFrame(plc), pd.DataFrame(windows), spread_tab
 
 
+# Check the engine against numbers computed another way
 def check_engine(ret, sig, sample="train"):
-    """Sanity checks of the engine against numbers computed independently."""
     g, _ = legs(ret, sig, "SPY", sample)
     rows = []
+
     d, tr = run(g, np.ones(len(g)), np.ones(len(g)), 0.0)
     rows.append({"check": "buy_hold at 0 bp = compounded ret",
                  "engine": np.prod(1 + d), "independent": np.prod(1 + g["ret"]), "trades": tr})
+
     d, tr = run(g, np.ones(len(g)), np.zeros(len(g)), 0.0)
     rows.append({"check": "overnight at 0 bp = prod(1+overnight) x prod(1+0) (intraday in cash)",
                  "engine": np.prod(1 + d), "independent": np.prod(1 + g["overnight"]), "trades": tr})
+
     d, tr = run(g, np.zeros(len(g)), np.zeros(len(g)), 0.0)
     rows.append({"check": "all cash = compounded T-bill", "engine": np.prod(1 + d),
                  "independent": np.prod(1 + g["rf"]), "trades": tr})
+
     pos = g["sig_b"].to_numpy().astype(float)
     d1, t1 = run(g, pos, np.zeros(len(g)), 5e-4)
     d2, t2 = run_overnight_only(pos, g["overnight"].to_numpy(), g["rf_overnight"].to_numpy(),
@@ -326,10 +320,11 @@ SETUP = [
 ]
 
 
+# Shared markdown for steps 6 and 7
 def body(perf, be, plc, win, spread_tab, eng):
-    """Window, engine checks, performance at every cost, breakevens and placebo, as markdown lines."""
     names = ["buy_hold", "intraday", "overnight"] + [f"on_{s}" for s in SIGNALS]
     cols = ["strategy", "cum_ret_%", "ann_ret_%", "sharpe", "max_dd_%", "nights_in_%", "trades_per_yr"]
+
     out = ["Common window per ETF:", "",
            md_table(win, "{:.2f}"), "",
            "Corwin-Schultz one-way cost by year (bp, mean of the daily estimate):", "",
@@ -357,12 +352,14 @@ def report(source="yfinance"):
     ret, sig = load_train(source)
     perf, be, plc, win, spread_tab = backtest(source)
     eng = check_engine(ret, sig)
+
     out = [f"# Step 6: backtest ({source}, train sample only)", "",
            f"Generated by `python src/backtest.py {source}`. Only rows up to {TRAIN_END.date()} are loaded (asserted); "
            "nothing on validation or test rows.", ""]
     out += SETUP
     out += ["Each window starts at the first night on which all five signals exist.", ""]
     out += body(perf, be, plc, win, spread_tab, eng) + [NOTES]
+
     p = ROOT / "reports" / "step6_backtest.md"
     p.write_text("\n".join(out))
     print(f"wrote {p.relative_to(ROOT)}")

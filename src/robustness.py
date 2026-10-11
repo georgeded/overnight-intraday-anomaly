@@ -1,17 +1,10 @@
-"""Step 9: robustness checks. Descriptive only.
+# Step 9: robustness checks, descriptive only
+#
+#     python src/robustness.py
+#
+# Uses the whole 1993-2026 sample including the test period
+# Nothing here changes a frozen choice or feeds back into a decision
 
-    python src/robustness.py            # yfinance (default)
-
-Nothing here changes a frozen choice: the signal stays config.CHOSEN_SIGNAL, the
-engine and costs are the step 6 ones, and the step 8 test result stands as run.
-These checks use the whole data set (1993-2026), including the test period, to
-show how sensitive the findings are; none of them feeds back into a decision.
-
-Checks: eras; dropping the best 1% of days; weekend vs weekday nights; a rolling
-5-year walk-forward re-pick of the signal from 2019; block-bootstrap 95% CIs for
-Sharpe; with vs without flagged days; the signal lagged one day; volatility-scaled
-sizing; and the cumulative-return charts.
-"""
 import sys
 
 import matplotlib
@@ -41,19 +34,21 @@ COSTS = [0, 1]
 VOL_WINDOW, VOL_TARGET_WINDOW = 21, 252
 N_BOOT, BLOCK = 2000, 21
 FIG_DIR = ROOT / "reports" / "figures"
-# reference categorical palette, slots 1-4 (validated: CVD dE 9.1, normal-vision dE 22.9; direct labels
-# are drawn because two slots are below 3:1 contrast on the light surface)
+
+# colour-blind safe palette, lines are also labelled directly
 COLORS = {"buy_hold": "#2a78d6", "overnight": "#eb6834", "intraday": "#1baf7a", f"on_{SIG}": "#eda100"}
 
 
-# ---------- helpers ------------------------------------------------------------
+# Helpers
 
 def positions(g, lag=0):
     n = len(g)
     one, zero = np.ones(n), np.zeros(n)
     s = g[SIG].astype(float)
+
     if lag:
         s = s.shift(lag).fillna(0.0)  # yesterday's signal for tonight
+
     return {"buy_hold": (one, one), "overnight": (one, zero), "intraday": (zero, one),
             f"on_{SIG}": (s.to_numpy(), zero)}
 
@@ -76,24 +71,29 @@ def all_legs(source):
     return {t: legs(ret, sig, t, "all")[0] for t in TICKERS}, ret
 
 
-# ---------- 1. eras ----------------------------------------------------------------
+# 1. Eras
 
 def eras(G, rng):
     perf, gap, plc = [], [], []
     for t, g0 in G.items():
         for era, (a, b) in ERAS.items():
             g = window(g0, a, b)
+
             for name, (p_on, p_in) in positions(g).items():
                 for c in COSTS:
                     m, _ = evaluate(g, p_on, p_in, c)
                     perf.append({"ticker": t, "era": era, "strategy": name, "cost_bp": c, **short(m)})
+
+            # overnight minus intraday gap
             d = (g["overnight"] - g["rf_overnight"] - g["intraday"]).to_numpy()
             r = sm.OLS(d, np.ones(len(d))).fit(cov_type="HAC", cov_kwds={"maxlags": nw_lags(len(d))})
             gap.append({"ticker": t, "era": era, "days": len(g), "first_day": g["date"].min().date(),
                         "overnight_minus_intraday_bp": r.params[0] * BP, "t": r.tvalues[0], "sig": stars(r.pvalues[0])})
+
             p_ann, _ = placebo(g, SIG, 0.0, rng)
             real = (np.prod(1 + run(g, *positions(g)[f"on_{SIG}"], 0.0)[0]) ** (1 / years_of(g)) - 1)
             plc.append({"ticker": t, "era": era, "placebo_percentile": (p_ann < real).mean() * 100})
+
     return pd.DataFrame(perf), pd.DataFrame(gap), pd.DataFrame(plc)
 
 
@@ -102,10 +102,10 @@ def pivot_perf(perf, by, cost, value):
     return p[STRATS].rename(columns=LABELS)
 
 
-# ---------- 2. drop the best 1% ---------------------------------------------------
+# 2. Drop the best 1% of days
 
+# Swap each strategy's best 1% of invested days for cash and recompute at 0 bp
 def drop_best(G):
-    """Replace the strategy's best 1% of invested days with cash and recompute (0 bp)."""
     rows = []
     for t, g0 in G.items():
         for split, (a, b) in [("all", (SPLITS["train"][0], END)), *SPLITS.items()]:
@@ -116,10 +116,12 @@ def drop_best(G):
                 invested = (p_on + p_in) > 0
                 k = max(1, int(round(0.01 * invested.sum())))
                 top = np.argsort(np.where(invested, d, -np.inf))[-k:]
+
                 d2 = d.copy()
                 cash_day = np.where(p_on[top] > 0, g["rf_overnight"].to_numpy()[top], 0.0) if name != "buy_hold" \
                     else g["rf_overnight"].to_numpy()[top]
                 d2[top] = cash_day
+
                 yrs = years_of(g)
                 ann = lambda x: (np.prod(1 + x) ** (1 / yrs) - 1) * 100
                 sh = lambda x: (x - rf).mean() / (x - rf).std(ddof=1) * np.sqrt(252)
@@ -129,7 +131,7 @@ def drop_best(G):
     return pd.DataFrame(rows)
 
 
-# ---------- 3. weekend vs weekday ------------------------------------------------
+# 3. Weekend vs weekday nights
 
 def weekend(G):
     rows = []
@@ -137,11 +139,14 @@ def weekend(G):
         for split, (a, b) in [("all", (SPLITS["train"][0], END)), *SPLITS.items()]:
             g = window(g0, a, b)
             g = g[g["rf_days"].notna()]
+
             y = (g["overnight"] - g["rf_overnight"]).to_numpy()
             long_gap = (g["rf_days"] > 1).to_numpy(float)
             r = sm.OLS(y, sm.add_constant(long_gap)).fit(cov_type="HAC", cov_kwds={"maxlags": nw_lags(len(y))})
+
             wk, we = y[long_gap == 0], y[long_gap == 1]
             share = g.loc[g[SIG].astype(bool), "rf_days"].gt(1).mean() * 100
+
             rows.append({"ticker": t, "sample": split, "weekday_nights": len(wk), "weekend_holiday_nights": len(we),
                          "weekday_bp": wk.mean() * BP, "weekend_bp": we.mean() * BP,
                          "weekend_per_calendar_day_bp": we.mean() / g.loc[g["rf_days"] > 1, "rf_days"].mean() * BP,
@@ -151,12 +156,13 @@ def weekend(G):
     return pd.DataFrame(rows)
 
 
-# ---------- 4. walk-forward re-pick -------------------------------------------------
+# 4. Walk-forward re-pick
 
+# Each year from 2019, re-pick the signal with the step 7 rule on the last 5 years
 def walk_forward(G):
-    """Each year from 2019, re-pick the signal with the step 7 rule on the previous 5 years."""
     picks, start_year = [], int(SPLITS["test"][0][:4])
     end_year = pd.Timestamp(END).year
+
     for y in range(start_year, end_year + 1):
         a, b = f"{y - 5}-01-01", f"{y - 1}-12-31"
         rows = []
@@ -168,18 +174,22 @@ def walk_forward(G):
                 sh.append(m["sharpe"])
                 tr.append(m["trades_per_yr"])
             rows.append({"signal": s, "mean_sharpe": np.mean(sh), "trades": np.mean(tr)})
+
         r = pd.DataFrame(rows).assign(r2=lambda x: x["mean_sharpe"].round(2))
         best = r.sort_values(["r2", "trades"], ascending=[False, True]).iloc[0]
         picks.append({"year": y, "window": f"{a[:4]}-{b[:4]}", "picked": best["signal"],
                       "picked_mean_sharpe": best["mean_sharpe"],
                       f"{SIG}_mean_sharpe": r.set_index("signal").loc[SIG, "mean_sharpe"]})
     picks = pd.DataFrame(picks)
+
+    # trade each year's pick through the test period
     perf = []
     for t, g0 in G.items():
         g = window(g0, *SPLITS["test"])
         chosen = g["date"].dt.year.map(picks.set_index("year")["picked"])
         p_wf = np.array([g.at[i, s] for i, s in zip(g.index, chosen)], dtype=float)
         zero = np.zeros(len(g))
+
         for name, pos in [("walk-forward re-pick", p_wf), (f"frozen {SIG}", g[SIG].to_numpy(float)),
                           ("always overnight", np.ones(len(g)))]:
             for c in COSTS:
@@ -189,10 +199,10 @@ def walk_forward(G):
     return picks, pd.DataFrame(perf)
 
 
-# ---------- 5. bootstrap CIs -----------------------------------------------------
+# 5. Bootstrap CIs
 
+# Circular block bootstrap indices, blocks of BLOCK days
 def block_indices(n, rng):
-    """Circular block bootstrap: N_BOOT x n indices built from blocks of BLOCK days."""
     nb = int(np.ceil(n / BLOCK))
     starts = rng.integers(0, n, size=(N_BOOT, nb))
     idx = (starts[:, :, None] + np.arange(BLOCK)[None, None, :]) % n
@@ -210,24 +220,29 @@ def bootstrap(G, rng, cost_bp=1):
             g = window(g0, a, b)
             rf = g["rf"].to_numpy()
             xs = {name: run(g, p_on, p_in, cost_bp / 1e4)[0] - rf for name, (p_on, p_in) in positions(g).items()}
+
             idx = block_indices(len(g), rng)
             boot = {k: sharpe_rows(v[idx]) for k, v in xs.items()}
             point = {k: v.mean() / v.std(ddof=1) * np.sqrt(252) for k, v in xs.items()}
+
             for k in STRATS:
                 lo, hi = np.percentile(boot[k], [2.5, 97.5])
                 rows.append({"ticker": t, "sample": split, "item": LABELS[k], "sharpe": point[k],
                              "ci_low": lo, "ci_high": hi})
+
+            # paired differences use the same draws
             for k1, k2 in [("overnight", "buy_hold"), (f"on_{SIG}", "overnight"), (f"on_{SIG}", "buy_hold")]:
                 diff = boot[k1] - boot[k2]
                 lo, hi = np.percentile(diff, [2.5, 97.5])
                 rows.append({"ticker": t, "sample": split, "item": f"{LABELS[k1]} minus {LABELS[k2]}",
                              "sharpe": point[k1] - point[k2], "ci_low": lo, "ci_high": hi})
+
     out = pd.DataFrame(rows)
     out["excludes_0"] = np.where((out["ci_low"] > 0) | (out["ci_high"] < 0), "yes", "")
     return out
 
 
-# ---------- 6. flagged days ----------------------------------------------------------
+# 6. Flagged days
 
 def flagged(G):
     rows = []
@@ -237,6 +252,7 @@ def flagged(G):
             pos = positions(g)
             keep = ~g[EXCLUDE_FLAGS].any(axis=1).to_numpy()
             gk = g[keep].reset_index(drop=True)
+
             for name, (p_on, p_in) in pos.items():
                 for c in COSTS:
                     m_all, _ = evaluate(g, p_on, p_in, c)
@@ -248,7 +264,7 @@ def flagged(G):
     return pd.DataFrame(rows)
 
 
-# ---------- 7. lagged signal ----------------------------------------------------------
+# 7. Lagged signal
 
 def lagged(G, rng):
     rows = []
@@ -262,6 +278,7 @@ def lagged(G, rng):
                     m, _ = evaluate(g, p_on, p_in, c)
                     row[f"ann_% {c}bp"] = m["ann_ret_%"]
                     row[f"sharpe {c}bp"] = m["sharpe"]
+
                 gg = g.assign(_lag=p_on.astype(bool))
                 p_ann, _ = placebo(gg, "_lag", 0.0, rng)
                 real = np.prod(1 + run(g, p_on, p_in, 0.0)[0]) ** (1 / years_of(g)) - 1
@@ -270,28 +287,28 @@ def lagged(G, rng):
     return pd.DataFrame(rows)
 
 
-# ---------- 8. volatility-scaled sizing ---------------------------------------------
+# 8. Volatility-scaled sizing
 
+# run() with fractional positions, the rest sits in cash and costs apply to weight changes
 def run_weighted(g, w_on, w_in, cost):
-    """run() for fractional positions: the rest of each leg is in cash; cost on |change in weight|."""
     n = len(g)
     seq = np.empty(2 * n)
     seq[0::2], seq[1::2] = w_on, w_in
     ch = np.abs(np.diff(np.concatenate([[0.0], seq, [0.0]])))
+
     on = w_on * g["overnight"].to_numpy() + (1 - w_on) * g["rf_overnight"].to_numpy()
     intra = w_in * g["intraday"].to_numpy() + (1 - w_in) * g["rf_intraday"].to_numpy()
     gross = (1 - cost * ch[0:2 * n:2]) * (1 + on) * (1 - cost * ch[1:2 * n:2]) * (1 + intra)
     gross[-1] *= 1 - cost * ch[-1]
+
     return gross - 1, ch.sum()
 
 
+# Weight is target / trailing vol, capped at 1 so there is no leverage
+# Vol is the 21 day std up to yesterday, target its 252 day median
 def vol_weights(ret, t):
-    """Weight = min(1, target / trailing vol), all estimates known at the previous close.
-
-    Vol: std of the leg's returns over the last 21 days up to the previous day.
-    Target: median of that vol over the previous 252 days. No leverage (cap 1).
-    """
     r = ret[ret["ticker"] == t].sort_values("date").set_index("date")
+
     out = {}
     for leg, col in [("on", "overnight"), ("in", "intraday"), ("cc", "ret")]:
         vol = r[col].rolling(VOL_WINDOW, min_periods=VOL_WINDOW).std().shift(1)
@@ -308,9 +325,11 @@ def vol_scaled(G, ret):
             g = window(g0, a, b)
             ww = w.reindex(g["date"]).fillna(1.0).to_numpy()
             pos = positions(g)
+
             scaled = {"buy_hold": (ww[:, 2], ww[:, 2]), "overnight": (ww[:, 0], np.zeros(len(g))),
                       "intraday": (np.zeros(len(g)), ww[:, 1]),
                       f"on_{SIG}": (pos[f"on_{SIG}"][0] * ww[:, 0], np.zeros(len(g)))}
+
             for name in STRATS:
                 for c in COSTS:
                     m0, _ = evaluate(g, *pos[name], c)
@@ -324,30 +343,38 @@ def vol_scaled(G, ret):
     return pd.DataFrame(rows)
 
 
+# With 0/1 weights run_weighted must match run
 def check_weighted(G):
     g = G["SPY"]
     pos = positions(g)[f"on_{SIG}"]
+
     a, _ = run(g, *pos, 2e-4)
     b, _ = run_weighted(g, *pos, 2e-4)
     return float(np.max(np.abs(a - b)))
 
 
-# ---------- chart ------------------------------------------------------------------
+# Chart
 
 def chart(G, cost_bp, path):
     fig, axes = plt.subplots(3, 1, figsize=(10, 12), sharex=False)
+
     for ax, t in zip(axes, TICKERS):
         g = G[t]
+
         for name, (p_on, p_in) in positions(g).items():
             d, _ = run(g, p_on, p_in, cost_bp / 1e4)
             eq = np.cumprod(1 + d)
             ax.plot(g["date"], eq, color=COLORS[name], lw=2, label=LABELS[name])
             ax.annotate(f"{LABELS[name]}  {eq[-1]:.1f}x", (g["date"].iloc[-1], eq[-1]), xytext=(6, 0),
                         textcoords="offset points", va="center", fontsize=8, color="#0b0b0b")
+
         ax.set_yscale("log")
+
+        # mark where validation and test start
         for x, lab in [(SPLITS["validation"][0], "validation"), (SPLITS["test"][0], "test")]:
             ax.axvline(pd.Timestamp(x), color="#8a8984", lw=1, ls=":")
             ax.text(pd.Timestamp(x), ax.get_ylim()[1], f" {lab}", va="top", fontsize=8, color="#52514e")
+
         ax.axhline(1, color="#c3c2b7", lw=0.8)
         ax.set_title(f"{t}: growth of $1, {g['date'].min().year}-{g['date'].max().year}, "
                      f"{cost_bp} bp per trade", loc="left", fontsize=11, color="#0b0b0b")
@@ -355,25 +382,30 @@ def chart(G, cost_bp, path):
         for side in ["top", "right"]:
             ax.spines[side].set_visible(False)
         ax.tick_params(colors="#52514e", labelsize=8)
+
+        # room on the right for the labels, ticks every 4 years
         ax.set_xlim(g["date"].min(), g["date"].max() + pd.Timedelta(days=1400))
         first, last = g["date"].min().year, g["date"].max().year
         ax.set_xticks([pd.Timestamp(f"{y}-01-01") for y in range(first + (4 - first % 4) % 4, last + 1, 4)])
         ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%Y"))
+
     axes[0].legend(loc="upper left", fontsize=8, frameon=False)
     fig.patch.set_facecolor("#fcfcfb")
     for ax in axes:
         ax.set_facecolor("#fcfcfb")
+
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=130)
     plt.close(fig)
 
 
-# ---------- report ------------------------------------------------------------------
+# Report
 
 def report(source="yfinance"):
     rng = np.random.default_rng(9)
     G, ret = all_legs(source)
+
     era_perf, era_gap, era_plc = eras(G, rng)
     drop = drop_best(G)
     wk = weekend(G)
@@ -383,11 +415,13 @@ def report(source="yfinance"):
     lag = lagged(G, rng)
     vol = vol_scaled(G, ret)
     wcheck = check_weighted(G)
+
     chart(G, 0, FIG_DIR / "step9_cumulative_0bp.png")
     chart(G, 1, FIG_DIR / "step9_cumulative_1bp.png")
 
     win = pd.DataFrame([{"ticker": t, "first_day": g["date"].min().date(), "last_day": g["date"].max().date(),
                          "days": len(g)} for t, g in G.items()])
+
     out = [f"# Step 9: robustness ({source})", "",
            f"Generated by `python src/robustness.py {source}`. Descriptive only: no frozen choice was changed "
            f"(signal `{SIG}`, step 6 engine and costs), the step 8 test stands as run, and nothing here feeds a "
@@ -438,6 +472,7 @@ def report(source="yfinance"):
             f"{VOL_TARGET_WINDOW} days; the rest of the position is in cash; no leverage. Costs are charged on every "
             f"change in weight. Engine check: with 0/1 weights it reproduces the step 6 engine (max difference "
             f"{wcheck:.1e}).", "", md_table(vol, "{:.2f}"), ""]
+
     p = ROOT / "reports" / "step9_robustness.md"
     p.write_text("\n".join(out))
     print(f"wrote {p.relative_to(ROOT)}")
