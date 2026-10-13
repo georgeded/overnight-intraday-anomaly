@@ -1,10 +1,4 @@
-# Step 8: final test on 2019-2026, run once with everything frozen
-#
-#     python src/test_period.py run       # compute once and save the results
-#     python src/test_period.py report    # write the report from the saved results
-#
-# Frozen: the chosen signal, the step 6 engine and costs, the step 5 test code
-# H4 repeats H1 and the H2 regression on 2019-2020 and 2021+ against train
+# Step 8: final test on 2019-2026, run once
 
 import pickle
 import subprocess

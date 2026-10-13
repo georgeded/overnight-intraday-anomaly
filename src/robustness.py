@@ -1,9 +1,4 @@
-# Step 9: robustness checks, descriptive only
-#
-#     python src/robustness.py
-#
-# Uses the whole 1993-2026 sample including the test period
-# Nothing here changes a frozen choice or feeds back into a decision
+# Step 9: robustness checks and cumulative-return charts
 
 import sys
 

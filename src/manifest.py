@@ -1,5 +1,4 @@
-# Step 1: record what is in data/raw (source, download date, coverage, checksum)
-# manifest.csv is tracked in git so every report can point to the exact snapshot
+# Step 1: record what is in data/raw
 
 import hashlib
 from datetime import datetime, timezone

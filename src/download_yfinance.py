@@ -1,5 +1,4 @@
-# Download daily OHLCV, dividends and splits for the ETFs from Yahoo Finance
-# Raw open and close are kept next to Adj Close so dividends can be handled by hand
+# Download daily ETF prices from Yahoo Finance
 
 import time
 

@@ -1,10 +1,4 @@
-# Step 2: check the price panel, VIX and T-bill data
-#
-#     python src/checks.py           # yfinance
-#     python src/checks.py crsp
-#
-# Nothing is dropped. Each check returns the rows it flags and flag_panel adds
-# one flag column per issue, so later steps can choose what to exclude
+# Step 2: data quality checks on prices, VIX and T-bill
 
 import sys
 

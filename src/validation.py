@@ -1,9 +1,4 @@
-# Step 7: run the step 6 strategies on validation (2013-2018) and pick one signal
-#
-#     python src/validation.py
-#
-# Rule fixed before the run: best Sharpe at 1 bp averaged over the three ETFs,
-# ties at two decimals go to the signal that trades less
+# Step 7: validation backtest and signal choice
 
 import sys
 

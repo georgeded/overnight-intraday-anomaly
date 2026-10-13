@@ -1,4 +1,4 @@
-# Download VIX (CBOE, FRED as a check) and the 3-month T-bill rate (FRED)
+# Download VIX and the 3-month T-bill rate
 
 import pandas as pd
 

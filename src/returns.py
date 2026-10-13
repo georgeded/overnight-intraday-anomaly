@@ -1,13 +1,4 @@
-# Step 3: build and verify the daily returns, no statistics yet
-#
-#     python src/returns.py          # yfinance
-#     python src/returns.py crsp
-#
-# Per ETF and day:
-#     ret        close to close total return
-#     overnight  previous close to open, dividend included
-#     intraday   close / open - 1
-#     rf         T-bill return over the same close to close period
+# Step 3: build and verify overnight, intraday and risk-free returns
 
 import sys
 

@@ -1,18 +1,4 @@
-# Step 4: overnight signals, using only what is known at each close
-#
-#     python src/signals.py          # yfinance
-#     python src/signals.py crsp
-#
-# A signal on day t decides whether to hold the ETF from t's close to the next open,
-# so it gets paired with the overnight return on the next row (trade_date)
-#
-#     sig_a   intraday(t) < 0
-#     sig_b   intraday(t) at or below the 20th percentile of the previous 252 days
-#     sig_c   VIX(t) above its median over the previous 252 days
-#     sig_ac  sig_a and sig_c
-#     sig_bc  sig_b and sig_c
-#
-# Signals stay NaN until a full 252 day window exists
+# Step 4: overnight signals and look-ahead tests
 
 import sys
 

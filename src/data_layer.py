@@ -1,21 +1,4 @@
-# Turns raw downloads into one standard daily price panel
-#
-#     load_prices("yfinance")
-#     load_prices("crsp")      # same columns, not tested until WRDS access
-#
-# Columns, one row per ticker and trading day:
-#     date, ticker              trading day, ETF ticker
-#     open, high, low, close    unadjusted prices as traded
-#     bid, ask                  closing bid and ask (NaN for yfinance)
-#     ret                       close to close total return, dividends included
-#     retx                      close to close return without dividends
-#     volume                    shares traded, unadjusted
-#     dividend                  cash dividend per share on its ex-date, else 0
-#     split_factor              shares after / shares before on a split day, else 1
-#
-# Prices and ret are on the same basis, so a day splits cleanly into two legs:
-#     intraday  = close / open - 1
-#     overnight = (1 + ret) / (close / open) - 1
+# Loads raw data into one standard daily price panel
 
 import numpy as np
 import pandas as pd

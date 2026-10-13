@@ -1,14 +1,4 @@
-# Step 5: hypothesis tests on the train sample only (1993-2012)
-#
-#     python src/hypothesis_tests.py          # yfinance
-#     python src/hypothesis_tests.py crsp
-#
-# H1  overnight vs intraday excess return, Newey-West t-test on the difference
-# H2  does today's intraday return, sig_b or VIX predict the next night
-# H3  SPY vs IWM, stacked regression with Driscoll-Kraay errors
-# H4  left for the test step
-#
-# Everything runs twice, with and without the step 2 flagged days
+# Step 5: hypothesis tests on the train sample
 
 import sys
 

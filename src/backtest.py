@@ -1,17 +1,4 @@
-# Step 6: backtest engine, run on the train sample only (1993-2012)
-#
-#     python src/backtest.py          # yfinance
-#     python src/backtest.py crsp
-#
-# Each day has an overnight leg and an intraday leg, and every leg is either
-# fully in the ETF or in cash. Cash earns the T-bill rate overnight only.
-# Every change of position is a trade, so holding one night costs two trades.
-#
-#     buy_hold      in on every leg
-#     intraday      in on intraday legs, cash overnight
-#     overnight     in on overnight legs, cash intraday
-#     on_<signal>   hold the night when yesterday's signal is on
-#     placebo       1000 random sets of nights, same count as the signal
+# Step 6: backtest engine and train-sample backtests
 
 import sys
 
