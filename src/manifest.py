@@ -11,10 +11,11 @@ SOURCES = {
     "crsp_daily.csv": ("WRDS CRSP", "CRSP v2 daily stock file, PERMNO 84398 SPY, 86755 QQQ, 88222 IWM"),
     "wrds_vix.csv": ("WRDS CBOE", "VIX index, vix column = close"),
     "ff_rf_daily.csv": ("WRDS Fama-French", "daily factors, rf = daily risk-free return in decimals"),
+    "wrds_tbill3m.csv": ("WRDS FRB H.15", "3-month T-bill, secondary market, annual % discount basis"),
 }
 
 # Date column and first date each file must cover
-DATE_COL = {"crsp_daily.csv": "DlyCalDt", "wrds_vix.csv": "date", "ff_rf_daily.csv": "date"}
+DATE_COL = {"crsp_daily.csv": "DlyCalDt", "wrds_vix.csv": "date", "ff_rf_daily.csv": "date", "wrds_tbill3m.csv": "date"}
 REQUIRED = {"crsp_daily.csv": "1993-01-29", "wrds_vix.csv": "1993-01-04", "ff_rf_daily.csv": "1993-01-04"}
 
 

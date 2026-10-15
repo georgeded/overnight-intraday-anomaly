@@ -12,6 +12,8 @@ COLUMNS = [
 CRSP_FILE = RAW / "crsp_daily.csv"
 VIX_FILE = RAW / "wrds_vix.csv"
 RF_FILE = RAW / "ff_rf_daily.csv"
+TBILL_FILE = RAW / "wrds_tbill3m.csv"
+BILL_DAYS = 91  # the 3-month bill is a 13-week bill
 
 
 def load_prices(source="crsp", tickers=TICKERS):
@@ -36,10 +38,34 @@ def split_legs(df):
     return df
 
 
-# Fama-French daily risk-free rate, already a daily return in decimals
+# Daily risk-free return per NYSE session, from the previous session's close to this one.
+# Uses the 3-month T-bill (wrds_tbill3m.csv) when present, else the Fama-French daily rf,
+# which WRDS rounds to 4 decimals (whole basis points per day) and is too coarse.
 def load_rf():
+    if TBILL_FILE.exists():
+        bill = pd.read_csv(TBILL_FILE, parse_dates=["date"]).set_index("date")["tb_m3"].dropna()
+        return tbill_to_daily(bill)
+
+    import warnings
+    warnings.warn("wrds_tbill3m.csv not found: using the rounded Fama-French rf", stacklevel=2)
     rf = pd.read_csv(RF_FILE, parse_dates=["date"]).set_index("date")["rf"]
     return rf.dropna()
+
+
+# T-bill rate (annual %, bank-discount basis) -> return per NYSE session.
+# Price of the bill = 1 - d * 91/360, its 91-day return is 1/price - 1, compounded per calendar
+# day so a Friday-to-Monday period earns 3 days. The rate known at the previous close applies;
+# bond-market holidays (NYSE open) carry the last rate forward.
+def tbill_to_daily(bill):
+    import exchange_calendars as xc
+
+    sessions = xc.get_calendar("XNYS", start="1990-01-01").sessions_in_range(bill.index.min(), bill.index.max())
+    d = bill.reindex(sessions.union(bill.index)).ffill().reindex(sessions) / 100
+    per_day = (1 / (1 - d * BILL_DAYS / 360)) ** (1 / BILL_DAYS)
+    days = sessions.to_series().diff().dt.days
+    rf = per_day.shift() ** days - 1
+    rf.index.name = "date"
+    return rf.dropna().rename("rf")
 
 
 # VIX close per NYSE session, gaps filled with the last close

@@ -7,10 +7,10 @@ import pandas as pd
 
 from checks import NYSE, flag_panel, md_table
 from config import END, ROOT, SAMPLES
-from data_layer import load_prices, load_rf, save_processed
+from data_layer import TBILL_FILE, load_prices, load_rf, save_processed
 
 
-# Fama-French daily rf is already the return from the previous session to today
+# data_layer.load_rf gives the return from the previous session to today
 # rf_days is the calendar days covered, kept to tell weekend nights apart
 def daily_rf(dates):
     sessions = pd.DatetimeIndex(sorted(set(dates)))
@@ -146,8 +146,13 @@ def report(source="crsp"):
            "- `ret`: CRSP `DlyRet`, close-to-close total return with dividends",
            "- `intraday = close / open - 1` (same-day CRSP `DlyOpen` and `DlyPrc`, unadjusted)",
            "- `overnight = (1 + ret) / (close / open) - 1`: previous close to open, so the dividend and any split adjustment sit here",
-           "- `rf`: Fama-French daily risk-free return (`ff_rf_daily.csv`, decimal), used as is for the period from the "
-           "previous session's close to today's close. No T-bill conversion.",
+           ("- `rf`: 3-month T-bill (`wrds_tbill3m.csv`, Fed H.15, annual % on a discount basis) converted to a "
+            "return from the previous session's close to today's close: bill price = 1 - d·91/360, 91-day return "
+            "1/price - 1, compounded per calendar day, using the rate known at the previous close."
+            if TBILL_FILE.exists() else
+            "- `rf`: Fama-French daily risk-free return (`ff_rf_daily.csv`, decimal), used as is for the period from "
+            "the previous session's close to today's close. It is rounded to whole basis points per day; see the "
+            "step 2 report (section 9)."),
            f"- Sample ends {END}. `sample` column: train 1993-2012, validation 2013-2018, test 2019-2025.",
            f"- Step 2 flags carried through: {', '.join(f'`{f}`' for f in flags)}.", "",
            "Rows per sample:", "", md_table(counts.rename_axis("sample")), "",
@@ -170,8 +175,9 @@ def report(source="crsp"):
            f"- `rf_overnight` equals `rf` on every day: {rf['overnight_equals_rf']}; "
            f"`rf_intraday` is 0 on every day: {rf['intraday_zero']}",
            f"- Largest error in `overnight_xs = overnight - rf`: {rf['xs_check']:.1e}",
-           "- Mean rf by calendar days covered (Fama-French rf is per trading day, so a weekend earns about "
-           "the same as a weekday):", "", md_table(rf["by_day"], "{:.3f}"), "",
+           "- Mean rf by calendar days covered (the T-bill rf accrues per calendar day, so a Friday-to-Monday "
+           "period earns about three times a weekday; the Fama-French rf is per trading day):", "",
+           md_table(rf["by_day"], "{:.3f}"), "",
            "Annual levels and the 4-decimal rounding of the rf file are in the step 2 report (section 9).", ""]
     out += [NOTES]
 
