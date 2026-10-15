@@ -63,7 +63,7 @@ NOTES = """## What validation says (yfinance snapshot)
 """
 
 
-def report(source="yfinance"):
+def report(source="crsp"):
     ret, sig = load_sample(source, SAMPLE)
     perf, be, plc, win, spread_tab = backtest(source, SAMPLE)
     perf_train = backtest(source, "train")[0]
@@ -95,4 +95,4 @@ def report(source="yfinance"):
 
 
 if __name__ == "__main__":
-    report(sys.argv[1] if len(sys.argv) > 1 else "yfinance")
+    report(sys.argv[1] if len(sys.argv) > 1 else "crsp")

@@ -1,4 +1,4 @@
-# Step 2: data quality checks on prices, VIX and T-bill
+# Step 2: data quality checks on CRSP prices, VIX and the risk-free rate
 
 import sys
 
@@ -6,8 +6,8 @@ import exchange_calendars as xc
 import numpy as np
 import pandas as pd
 
-from config import PROCESSED, RAW, ROOT
-from data_layer import load_prices, split_legs
+from config import END, PERMNOS, PROCESSED, ROOT
+from data_layer import RF_FILE, VIX_FILE, load_crsp_raw, load_prices, split_legs
 
 EXTREME = 0.05   # list any leg that moves more than this
 REVERSAL = 0.03  # both legs past this in opposite directions, maybe a bad open
@@ -45,7 +45,7 @@ def event_for(date):
     for start, end, label in sorted(EVENTS, key=lambda e: e[0] != e[1]):
         if pd.Timestamp(start) <= date <= pd.Timestamp(end):
             return label
-    return "no known event: verify against CRSP"
+    return "no known event"
 
 
 def sessions(start, end):
@@ -193,42 +193,74 @@ COLS = ["date", "ticker", "open", "high", "low", "close", "bid", "ask",
         "ret", "retx", "volume", "dividend", "split_factor"]
 
 
-# VIX and T-bill
+# Raw file checks, before load_prices cleans anything
 
-def vix_checks(end):
-    cboe = pd.read_parquet(RAW / "vix_cboe.parquet")
-    fred = pd.read_parquet(RAW / "vix_fred.parquet")["VIXCLS"].dropna()
-    cal = sessions(cboe.index.min(), end)
-    both = cboe[["close"]].join(fred, how="inner")
-    diff = (both["close"] - both["VIXCLS"]).abs()
+def raw_checks():
+    raw = load_crsp_raw()
+    names = {v: k for k, v in PERMNOS.items()}
 
-    ohlc_bad = cboe[(cboe["high"] < cboe["low"]) | (cboe["open"] > cboe["high"]) | (cboe["open"] < cboe["low"])
-                    | (cboe["close"] > cboe["high"]) | (cboe["close"] < cboe["low"])]
+    tickers = (raw.groupby(["PERMNO", "Ticker"])["DlyCalDt"].agg(["min", "max", "size"])
+               .reset_index().rename(columns={"min": "first", "max": "last", "size": "rows"}))
+    tickers.insert(1, "mapped_to", tickers["PERMNO"].map(names))
+
+    exact = raw[raw.duplicated(keep=False)]
+    key_only = raw[raw.duplicated(["PERMNO", "DlyCalDt"], keep=False) & ~raw.duplicated(keep=False)]
+    no_trade = raw[raw["DlyClose"].isna() | (raw["DlyVol"] == 0)]
+    no_open = raw[raw["DlyOpen"].isna()]
+
+    cols = ["PERMNO", "Ticker", "DlyCalDt", "DlyPrc", "DlyClose", "DlyOpen", "DlyVol", "DlyRet"]
+    return {"rows": len(raw), "tickers": tickers, "exact_dups": exact[cols].drop_duplicates(),
+            "n_exact": len(exact) - len(exact.drop_duplicates()), "key_dups": len(key_only),
+            "no_trade": no_trade[cols], "no_open": no_open[cols]}
+
+
+# One suspicious IWM day: Yahoo's open was far above the close
+def iwm_check(flagged):
+    d = flagged[(flagged["ticker"] == "IWM") & flagged["date"].between("2002-11-07", "2002-11-15")]
+    d = d.assign(date=d["date"].dt.date)
+    return d[["date", "open", "high", "low", "close", "prev_close", "overnight", "intraday", "ret",
+              "flag_stale_open", "flag_extreme", "flag_reversal", "flag_ohlc"]]
+
+
+# VIX and risk-free rate
+
+def vix_checks():
+    v = pd.read_csv(VIX_FILE, parse_dates=["date"]).set_index("date")
+    v = v[v.index <= END]
+    cal = sessions(v.index.min(), END)
+    close = v["vix"]
 
     return {
-        "common_days": len(both),
-        "max_abs_diff": diff.max(),
-        "days_diff_over_0.01": int((diff > 0.01).sum()),
-        "cboe_missing_sessions": list(cal.difference(cboe.index).date),
-        "fred_missing_sessions": list(cal.difference(fred.index).date),
-        "cboe_non_session_rows": len(cboe.index.difference(cal)),
-        "cboe_non_session_first": cboe.index.difference(cal).min().date(),
-        "ohlc_bad": ohlc_bad,
+        "rows": len(v), "first": v.index.min().date(), "last": v.index.max().date(),
+        "nan_close": list(close[close.isna()].index.date),
+        "missing_sessions": list(cal.difference(close.dropna().index).date),
+        "non_session_rows": list(v.index.difference(cal).date),
+        "min": close.min(), "max": close.max(),
+        "max_date": close.idxmax().date(),
+        "non_positive": int((close <= 0).sum()),
+        "big_jumps": close.pct_change(fill_method=None).abs().gt(0.5).sum(),
+        "open_above_close_x2": int((v["vixo"] > 2 * close).sum()),
     }
 
 
-def tbill_checks(end):
-    tb = pd.read_parquet(RAW / "tbill3m_fred.parquet")["DTB3"].dropna()
-    cal = sessions(tb.index.min(), end)
-    missing = cal.difference(tb.index)
-    by_day = pd.Series([d.strftime("%m-%d") for d in missing]).value_counts()
-    gaps = tb.index.to_series().diff().dt.days
+def rf_checks():
+    rf = pd.read_csv(RF_FILE, parse_dates=["date"]).set_index("date")["rf"]
+    rf = rf[rf.index <= END]
+    cal = sessions(rf.index.min(), END)
+
+    by_year = (1 + rf).groupby(rf.index.year).prod() - 1
+    years = pd.DataFrame({"compounded_rf_%": by_year * 100,
+                          "mean_daily_bp": rf.groupby(rf.index.year).mean() * 1e4,
+                          "days": rf.groupby(rf.index.year).size()}).rename_axis("year")
 
     return {
-        "obs": len(tb), "first": tb.index.min().date(), "last": tb.index.max().date(),
-        "missing_sessions": missing, "missing_by_day": by_day,
-        "longest_gap_days": int(gaps.max()), "min": tb.min(), "max": tb.max(),
-        "negative_days": list(tb[tb < 0].index.date),
+        "rows": len(rf), "first": rf.index.min().date(), "last": rf.index.max().date(),
+        "nan": int(rf.isna().sum()), "negative": int((rf < 0).sum()),
+        "min": rf.min(), "max": rf.max(), "mean": rf.mean(),
+        "distinct": sorted(rf.dropna().unique()),
+        "missing_sessions": list(cal.difference(rf.index).date),
+        "non_session_rows": list(rf.index.difference(cal).date),
+        "years": years,
     }
 
 
@@ -252,14 +284,15 @@ def short_list(items, n=12):
     return ", ".join(items[:n]) + (f" ... (+{len(items) - n} more)" if len(items) > n else "") if items else "none"
 
 
-def report(source="yfinance"):
+def report(source="crsp"):
     df = load_prices(source)
-    end = df["date"].max()
+    df = df[df["date"] <= END]
 
     flagged = flag_panel(df)
     PROCESSED.mkdir(parents=True, exist_ok=True)
     flagged.to_parquet(PROCESSED / f"prices_{source}_flagged.parquet", index=False)
 
+    raw = raw_checks()
     cov = coverage(df)
     dup, bad, ohlc = duplicates(df), bad_prices(df), ohlc_violations(df)
     stale = stale_opens(df)
@@ -268,8 +301,9 @@ def report(source="yfinance"):
     div, div_year = dividend_checks(df)
     spl = splits(df)
     early, early_summary = half_days(df)
-    vix = vix_checks(end)
-    tb = tbill_checks(end)
+    iwm = iwm_check(flagged)
+    vix = vix_checks()
+    rf = rf_checks()
 
     stale_year = (stale.groupby(["ticker", stale["date"].dt.year]).size()
                   / df.groupby(["ticker", df["date"].dt.year]).size()).unstack(0).fillna(0)
@@ -277,51 +311,73 @@ def report(source="yfinance"):
     unexplained = ext[ext["event"].str.startswith("no known")]
 
     out = [f"# Step 2: data checks ({source})", ""]
-    out += [f"Generated by `python src/checks.py {source}` from the snapshot in `data/raw/manifest.csv`. "
+    out += [f"Generated by `python src/checks.py {source}` from the snapshot in `data/raw/manifest.csv` "
+            f"(`crsp_daily.csv`, `wrds_vix.csv`, `ff_rf_daily.csv`), up to {END}. "
             f"Flagged panel: `data/processed/prices_{source}_flagged.parquet` (nothing dropped).", ""]
 
-    out += ["## 1. Coverage vs the NYSE calendar", "",
+    out += ["## 1. Raw CRSP file", "",
+            f"{raw['rows']} rows for the three PERMNOs. Rows are matched to ETFs on PERMNO only; the ticker "
+            "field changes over time:", "", md_table(raw["tickers"].assign(first=raw["tickers"]["first"].dt.date,
+                                                                          last=raw["tickers"]["last"].dt.date)), "",
+            f"Exact duplicate rows: **{raw['n_exact']}** extra copies, dropped in `data_layer` (one copy kept). "
+            f"Same PERMNO and date with different values: **{raw['key_dups']}**.", "",
+            md_table(raw["exact_dups"].assign(DlyCalDt=raw["exact_dups"]["DlyCalDt"].dt.date)), "",
+            "Days with no trade (no `DlyClose` or zero volume; `DlyPrc` is then the bid/ask midpoint):", "",
+            md_table(raw["no_trade"].assign(DlyCalDt=raw["no_trade"]["DlyCalDt"].dt.date)), "",
+            "Days with no opening price (no overnight or intraday return on these days):", "",
+            md_table(raw["no_open"].assign(DlyCalDt=raw["no_open"]["DlyCalDt"].dt.date)), ""]
+
+    out += ["## 2. Coverage vs the NYSE calendar", "",
             md_table(cov.assign(missing_sessions=cov["missing_sessions"].map(short_list),
                                 non_session_rows=cov["non_session_rows"].map(short_list))), ""]
-    out += [f"Duplicate (ticker, date) rows: **{len(dup)}**. "
+    out += [f"Duplicate (ticker, date) rows after loading: **{len(dup)}**. "
             f"Zero, negative or NaN prices or zero volume: **{len(bad)}**. "
             f"High < low, or open/close outside [low, high]: **{len(ohlc)}**.", ""]
 
-    out += ["## 2. Stale opens (open == previous close)", "",
+    out += ["## 3. Stale opens (open == previous close)", "",
             f"{len(stale)} rows in total. Share of days per year:", "",
             md_table(stale_year.round(3), "{:.3f}"), ""]
 
-    out += [f"## 3. Moves beyond ±{EXTREME:.0%}", "",
+    out += [f"## 4. Moves beyond ±{EXTREME:.0%}", "",
             f"{(ext['leg'] == 'overnight').sum()} overnight and {(ext['leg'] == 'intraday').sum()} intraday. "
             f"{len(unexplained)} have no matching event:", "",
             md_table(unexplained) if len(unexplained) else "none", "",
             f"Large opposite-sign legs (both beyond ±{REVERSAL:.0%}), the pattern a bad open would leave:", "",
-            md_table(rev.assign(date=rev["date"].dt.date)), "",
+            md_table(rev.assign(date=rev["date"].dt.date)) if len(rev) else "none", "",
             "<details><summary>All moves beyond the threshold</summary>", "", md_table(ext), "", "</details>", ""]
 
-    out += ["## 4. Dividends and splits", "", md_table(div.set_index("ticker").T.rename_axis("metric"), "{:.6f}"), "",
+    out += ["## 5. IWM around 2002-11-12", "",
+            "Yahoo's open on 2002-11-12 was about 6% above the close, and it "
+            "showed up as an unexplained reversal in the Yahoo checks. CRSP:", "",
+            md_table(iwm, "{:.4f}"), ""]
+
+    out += ["## 6. Dividends and splits", "", md_table(div.set_index("ticker").T.rename_axis("metric"), "{:.6f}"), "",
             "Ex-dates per year:", "", md_table(div_year), "",
             "Splits:", "", md_table(spl.assign(date=spl["date"].dt.date)), ""]
 
-    out += ["## 5. Half-days", "",
+    out += ["## 7. Half-days", "",
             f"{len(early)} NYSE early closes in the sample: {short_list(early.date, 50)}.", "",
             "Mean absolute leg return, half-days vs full days:", "", md_table(early_summary), ""]
 
-    out += ["## 6. VIX: CBOE vs FRED", "",
-            f"- Days in both: {vix['common_days']}; largest |close difference|: {vix['max_abs_diff']:.4f}; "
-            f"days differing by more than 0.01: {vix['days_diff_over_0.01']}",
-            f"- NYSE sessions missing from CBOE: {short_list(vix['cboe_missing_sessions'])}",
-            f"- NYSE sessions missing from FRED: {short_list(vix['fred_missing_sessions'])}",
-            f"- CBOE rows on non-NYSE days: {vix['cboe_non_session_rows']} (first {vix['cboe_non_session_first']})",
-            f"- CBOE rows with inconsistent open/high/low: {len(vix['ohlc_bad'])}, "
-            f"last one {vix['ohlc_bad'].index.max().date() if len(vix['ohlc_bad']) else 'n/a'}", ""]
+    out += ["## 8. VIX (`wrds_vix.csv`, column `vix`)", "",
+            f"- {vix['rows']} rows, {vix['first']} to {vix['last']}; range {vix['min']:.2f} to {vix['max']:.2f} "
+            f"(max on {vix['max_date']}); values at or below zero: {vix['non_positive']}",
+            f"- Rows with no close: {short_list(vix['nan_close'])}",
+            f"- NYSE sessions with no close: {short_list(vix['missing_sessions'])} (filled with the previous close)",
+            f"- Rows on non-NYSE days: {short_list(vix['non_session_rows'])} (dropped)",
+            f"- Day-to-day moves above 50%: {vix['big_jumps']}; open more than twice the close: "
+            f"{vix['open_above_close_x2']}", ""]
 
-    out += ["## 7. 3-month T-bill (FRED DTB3)", "",
-            f"- {tb['obs']} observations, {tb['first']} to {tb['last']}, range {tb['min']:.2f}% to {tb['max']:.2f}%",
-            f"- NYSE sessions with no rate: {len(tb['missing_sessions'])}; longest gap between observations: "
-            f"{tb['longest_gap_days']} calendar days",
-            f"- Most common missing days (MM-DD): {short_list([f'{k} ({v})' for k, v in tb['missing_by_day'].items()], 10)}",
-            f"- Negative-rate days: {short_list(tb['negative_days'])}", ""]
+    out += ["## 9. Risk-free rate (`ff_rf_daily.csv`, column `rf`)", "",
+            f"- {rf['rows']} rows, {rf['first']} to {rf['last']}; missing values: {rf['nan']}; negative: {rf['negative']}",
+            f"- Range {rf['min']:.5f} to {rf['max']:.5f} per day, mean {rf['mean']:.6f}. Compounded over a year "
+            "this gives 0-6%, in line with T-bill rates, so `rf` is a **decimal** daily return, not a percentage "
+            "(as a percentage it would compound to under 0.1% a year).",
+            f"- Distinct values: {', '.join(f'{x:.4f}' for x in rf['distinct'])}. The file is rounded to 4 "
+            "decimals, i.e. steps of 1 bp a day (about 2.5% a year).",
+            f"- NYSE sessions with no rf: {short_list(rf['missing_sessions'])}",
+            f"- rf rows on non-NYSE days: {short_list(rf['non_session_rows'])}", "",
+            md_table(rf["years"], "{:.3f}"), ""]
 
     out += [DECISIONS]
 
@@ -331,22 +387,25 @@ def report(source="yfinance"):
     print(f"wrote {path.relative_to(ROOT)} and {PROCESSED.name}/prices_{source}_flagged.parquet")
 
 
-DECISIONS = """## 8. Decisions
+DECISIONS = """## 10. Decisions
 
 | Issue | Handling |
 |---|---|
-| Yahoo prices are split-adjusted back in time | `data_layer` multiplies them back by later splits (QQQ 2:1 on 2000-03-20, IWM 2:1 on 2005-06-09) so open/close are as traded, like CRSP. Returns are unaffected. |
-| ret from Adj Close vs CRSP-style (close + dividend) / previous close | Kept Adj Close as specified; the two differ by at most ~2.5e-4 on an ex-date (Yahoo divides by the ex-dividend price, CRSP adds the dividend). |
-| Dividend leg | By construction the dividend lands on the overnight leg: intraday uses same-day open and close, overnight is total return over the intraday factor. The data mostly agree: on SPY and IWM ex-dates the open is lower than usual by 77% and 109% of the dividend (s.e. 16% and 22%). QQQ yields are too small to tell (7%, s.e. 49%). But mean intraday return on ex-dates is about -0.23% to -0.25% for SPY and IWM against ~0 on other days, so some of the drop may show up after the open (a Yahoo open that is not fully ex-dividend, or a real ex-day pattern). Kept and flagged (`flag_ex_div`); to be checked against CRSP `openprc`, and step 3 will report results with and without ex-dates. |
-| Stale opens | Kept and flagged (`flag_stale_open`). They force the overnight price return to zero, so they bias overnight towards zero. Robustness: rerun with these days excluded, and compare with CRSP opens once available. |
-| Extreme moves and reversals | Kept and flagged. Almost all line up with known events. Unexplained ones are listed above and will be checked against CRSP; they are not dropped on the basis of Yahoo alone. |
-| Half-days | Kept and flagged (`flag_half_day`). The intraday leg is 3.5 hours on these days; robustness check excluding them. |
-| First row per ticker | No return (no previous close); excluded from return statistics. |
-| VIX | Use CBOE close; FRED is identical where both exist. Ignore VIX open/high/low (inconsistent in early years). Use only NYSE sessions (CBOE has rows on market holidays since 2022). Fill the few CBOE gaps from FRED, otherwise carry the previous close forward. |
-| T-bill | Missing days are bond-market holidays (Columbus Day, Veterans Day) when NYSE is open. Carry the last rate forward. Daily risk-free = DTB3 / 100 / 360 × calendar days to the next session (discount-basis approximation, documented in step 3). |
-| Sample end | Snapshot is 2026-10-06; FRED series end 2026-10-02 and prices 2026-10-05. Not re-downloaded: Yahoo revises Adj Close history on every pull, so a fixed snapshot is more reproducible. Common end date: 2026-10-02. |
+| Source | CRSP v2 daily file only, rows picked and named by PERMNO (84398 SPY, 86755 QQQ, 88222 IWM). The ticker field is not used: QQQ was listed as QQQQ from 2004-12-01 to 2011-03-22. Yahoo, FRED and CBOE files are no longer used. |
+| Duplicate rows | 6 rows appear twice, identical in every column, all on ex-dividend days. One copy of each is kept. |
+| Close | `DlyPrc`, which equals `DlyClose` on every day with a trade. On 1997-03-31 SPY did not trade and `DlyPrc` is the bid/ask midpoint, the price CRSP's return is based on. |
+| Missing opens | 5 rows have no `DlyOpen`: the first row of SPY and QQQ, SPY 1993-02-01 and 1994-11-07, and the no-trade day 1997-03-31. Kept and flagged (`flag_bad_price`). Overnight and intraday are missing on those days, close-to-close `ret` is not. |
+| Stale opens | Kept and flagged (`flag_stale_open`). CRSP has the same pattern as Yahoo: 14% of SPY sessions in 1993, falling below 2% after 1998. So switching source does not remove this problem from the early years. |
+| Extreme moves and reversals | All moves beyond 5% match a known event, and there are no opposite-sign reversals beyond 3%. The unexplained reversals in the Yahoo data were Yahoo errors. Kept and flagged as before. |
+| IWM 2002-11-12 | CRSP's open is well below Yahoo's, so the Yahoo open was wrong and the day is ordinary in CRSP. The CRSP high looks like the same bad print: it is 7% above both the open and the close. Only a high-low spread estimate would use it, and with CRSP bid/ask available none is needed. |
+| Dividends | The file has no dividend amount, so it is backed out as (`ret` - `retx`) × previous close. `ret` - `retx` therefore matches the yield exactly by construction, and is zero on all other days. With CRSP opens, the open falls by 76% (SPY) and 110% (IWM) of the dividend on ex-dates, and intraday is about -0.22% to -0.25% on ex-dates. That matches the Yahoo results, so it is a real ex-day pattern rather than a Yahoo artefact. Kept and flagged (`flag_ex_div`). |
+| Splits | From the drop in `DlyCumFacPr`: QQQ 2:1 on 2000-03-20 and IWM 2:1 on 2005-06-09, both showing ordinary moves. |
+| Half-days | Kept and flagged (`flag_half_day`). |
+| VIX | `vix` column (close) on NYSE sessions only. Rows on market holidays are dropped, and the 2 NYSE sessions with no value carry the previous close forward. The 7 moves above 50% are all known shocks (2007-02-27, 2018-02-05, 2021-01-27, 2021-11-26, 2024-08-05, 2024-12-18, 2025-04-04). The open (`vixo`) has obvious errors (two days above twice the close) and is not used. |
+| Risk-free rate | `rf` is a decimal daily return, used as is with no T-bill discount conversion, all on the overnight leg. **The file is rounded to 4 decimals**, so rf only takes the values 0, 1, 2 or 3 bp a day. Compounded, that is up to about 1 percentage point a year away from the T-bill rate in either direction, and exactly 0 in 2003 and 2009-2017. The error moves each strategy's excess return in proportion to the time it holds the ETF, so it affects Sharpe ratios and comparisons with cash. A full-precision pull of the Fama-French daily rf would fix it. |
+| Sample end | 2025-12-31, the last CRSP day. VIX and rf go further and are cut there. |
 """
 
 
 if __name__ == "__main__":
-    report(sys.argv[1] if len(sys.argv) > 1 else "yfinance")
+    report(sys.argv[1] if len(sys.argv) > 1 else "crsp")

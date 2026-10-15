@@ -1,4 +1,4 @@
-# Step 1: record what is in data/raw
+# Step 1: record what is in data/raw, with full SHA-256 hashes
 
 import hashlib
 from datetime import datetime, timezone
@@ -8,25 +8,14 @@ import pandas as pd
 from config import RAW
 
 SOURCES = {
-    "yf_SPY.parquet": ("Yahoo Finance via yfinance", "SPY daily, auto_adjust=False, actions=True"),
-    "yf_QQQ.parquet": ("Yahoo Finance via yfinance", "QQQ daily, auto_adjust=False, actions=True"),
-    "yf_IWM.parquet": ("Yahoo Finance via yfinance", "IWM daily, auto_adjust=False, actions=True"),
-    "vix_cboe.parquet": ("CBOE", "cdn.cboe.com VIX_History.csv"),
-    "vix_fred.parquet": ("FRED", "VIXCLS"),
-    "tbill3m_fred.parquet": ("FRED", "DTB3 (3-month T-bill, secondary market, % p.a.)"),
-    "crsp_dsf.parquet": ("WRDS CRSP", "crsp.dsf (legacy SIZ daily stock file)"),
-    "crsp_dsf_v2.parquet": ("WRDS CRSP", "crsp.dsf_v2 (CIZ daily stock file)"),
+    "crsp_daily.csv": ("WRDS CRSP", "CRSP v2 daily stock file, PERMNO 84398 SPY, 86755 QQQ, 88222 IWM"),
+    "wrds_vix.csv": ("WRDS CBOE", "VIX index, vix column = close"),
+    "ff_rf_daily.csv": ("WRDS Fama-French", "daily factors, rf = daily risk-free return in decimals"),
 }
 
-# First date each file must cover (fund launches, VIX and T-bill from SPY's start)
-REQUIRED = {
-    "yf_SPY.parquet": "1993-01-29",
-    "yf_QQQ.parquet": "1999-03-10",
-    "yf_IWM.parquet": "2000-05-26",
-    "vix_cboe.parquet": "1993-01-04",
-    "vix_fred.parquet": "1993-01-04",
-    "tbill3m_fred.parquet": "1993-01-04",
-}
+# Date column and first date each file must cover
+DATE_COL = {"crsp_daily.csv": "DlyCalDt", "wrds_vix.csv": "date", "ff_rf_daily.csv": "date"}
+REQUIRED = {"crsp_daily.csv": "1993-01-29", "wrds_vix.csv": "1993-01-04", "ff_rf_daily.csv": "1993-01-04"}
 
 
 def sha256(path):
@@ -36,13 +25,9 @@ def sha256(path):
 
 
 def describe(path):
-    df = pd.read_parquet(path)
-    if "date" in df.columns:
-        df = df.set_index("date")
-
-    idx = pd.to_datetime(df.index)
-    valid = df.notna().any(axis=1).to_numpy()  # FRED has empty rows on holidays
-    source, detail = SOURCES.get(path.name, ("unknown", ""))
+    df = pd.read_csv(path, parse_dates=[DATE_COL[path.name]])
+    dates = df[DATE_COL[path.name]]
+    source, detail = SOURCES[path.name]
     mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
 
     return {
@@ -51,15 +36,14 @@ def describe(path):
         "series": detail,
         "downloaded_utc": mtime.strftime("%Y-%m-%d %H:%M"),
         "rows": len(df),
-        "rows_with_data": int(valid.sum()),
-        "first_date": idx[valid].min().date(),
-        "last_date": idx[valid].max().date(),
-        "sha256": sha256(path)[:16],
+        "first_date": dates.min().date(),
+        "last_date": dates.max().date(),
+        "sha256": sha256(path),
     }
 
 
 def build():
-    rows = [describe(p) for p in sorted(RAW.glob("*.parquet"))]
+    rows = [describe(RAW / f) for f in SOURCES if (RAW / f).exists()]
     man = pd.DataFrame(rows)
 
     missing = sorted(set(REQUIRED) - set(man["file"]))

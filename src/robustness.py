@@ -397,7 +397,7 @@ def chart(G, cost_bp, path):
 
 # Report
 
-def report(source="yfinance"):
+def report(source="crsp"):
     rng = np.random.default_rng(9)
     G, ret = all_legs(source)
 
@@ -510,4 +510,4 @@ about 1-2 bp per trade. The conditional signal adds nothing reliable.
 
 
 if __name__ == "__main__":
-    report(sys.argv[1] if len(sys.argv) > 1 else "yfinance")
+    report(sys.argv[1] if len(sys.argv) > 1 else "crsp")

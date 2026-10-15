@@ -16,3 +16,6 @@ __pycache__/
 .ipynb_checkpoints/
 .venv/
 venv/
+
+# old Yahoo/FRED/CBOE snapshot, kept locally only
+archive/

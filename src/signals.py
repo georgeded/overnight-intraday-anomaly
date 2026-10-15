@@ -156,7 +156,7 @@ def counts_by_sample(sig):
 
 # Report
 
-def report(source="yfinance"):
+def report(source="crsp"):
     ret = load_processed(f"returns_{source}")
     vix = load_vix()
     vix = vix[vix.index <= ret["date"].max()]
@@ -250,4 +250,4 @@ NOTES = """## Notes and open points
 
 
 if __name__ == "__main__":
-    report(sys.argv[1] if len(sys.argv) > 1 else "yfinance")
+    report(sys.argv[1] if len(sys.argv) > 1 else "crsp")

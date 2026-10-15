@@ -16,11 +16,11 @@ PERMNOS = {"SPY": 84398, "QQQ": 86755, "IWM": 88222}
 SAMPLES = {
     "train": ("1993-01-01", "2012-12-31"),
     "validation": ("2013-01-01", "2018-12-31"),
-    "test": ("2019-01-01", "2099-12-31"),
+    "test": ("2019-01-01", "2025-12-31"),
 }
 
 # Last day covered by every raw source
-END = "2026-10-02"
+END = "2025-12-31"
 
 # Signal picked on validation in step 7, frozen before the test run
 CHOSEN_SIGNAL = "sig_a"

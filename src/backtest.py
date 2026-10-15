@@ -210,7 +210,7 @@ def run_overnight_only(pos, on, rf_on, cost):
 # Report
 
 # All strategies on one sample, or a window inside it
-def backtest(source="yfinance", sample="train", signals=SIGNALS, window=None):
+def backtest(source="crsp", sample="train", signals=SIGNALS, window=None):
     ret, sig = load_sample(source, sample)
     rng = np.random.default_rng(2026)
     perf, be, plc, windows, spread_by_year = [], [], [], [], []
@@ -335,7 +335,7 @@ def body(perf, be, plc, win, spread_tab, eng):
     return out
 
 
-def report(source="yfinance"):
+def report(source="crsp"):
     ret, sig = load_train(source)
     perf, be, plc, win, spread_tab = backtest(source)
     eng = check_engine(ret, sig)
@@ -385,4 +385,4 @@ NOTES = """## What the train backtest says (yfinance snapshot)
 
 
 if __name__ == "__main__":
-    report(sys.argv[1] if len(sys.argv) > 1 else "yfinance")
+    report(sys.argv[1] if len(sys.argv) > 1 else "crsp")

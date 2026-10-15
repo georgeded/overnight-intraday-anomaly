@@ -274,7 +274,7 @@ def section(res, label):
     ]
 
 
-def report(source="yfinance"):
+def report(source="crsp"):
     ret, sig = load_train(source)
     full, clean = run(ret, sig, False), run(ret, sig, True)
     lags = nw_lags(len(ret[ret["ticker"] == "SPY"]))
@@ -332,4 +332,4 @@ NOTES = """## What the train sample says (yfinance snapshot)
 
 
 if __name__ == "__main__":
-    report(sys.argv[1] if len(sys.argv) > 1 else "yfinance")
+    report(sys.argv[1] if len(sys.argv) > 1 else "crsp")

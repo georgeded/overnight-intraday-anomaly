@@ -1,6 +1,5 @@
-# Loads raw data into one standard daily price panel
+# Loads raw WRDS data into one standard daily price panel
 
-import numpy as np
 import pandas as pd
 
 from config import PERMNOS, PROCESSED, RAW, TICKERS
@@ -10,16 +9,23 @@ COLUMNS = [
     "ret", "retx", "volume", "dividend", "split_factor",
 ]
 
+CRSP_FILE = RAW / "crsp_daily.csv"
+VIX_FILE = RAW / "wrds_vix.csv"
+RF_FILE = RAW / "ff_rf_daily.csv"
 
-def load_prices(source="yfinance", tickers=TICKERS):
-    if source == "yfinance":
-        df = pd.concat([_yfinance(t) for t in tickers], ignore_index=True)
-    elif source == "crsp":
-        df = _crsp(tickers)
-    else:
-        raise ValueError(f"source must be 'yfinance' or 'crsp', got {source!r}")
 
+def load_prices(source="crsp", tickers=TICKERS):
+    if source != "crsp":
+        raise ValueError(f"source must be 'crsp', got {source!r}")
+
+    df = _crsp(tickers)
     return df[COLUMNS].sort_values(["ticker", "date"]).reset_index(drop=True)
+
+
+# Raw CRSP rows for our three PERMNOs before any cleaning, used by the data checks
+def load_crsp_raw():
+    raw = pd.read_csv(CRSP_FILE, parse_dates=["DlyCalDt"])
+    return raw[raw["PERMNO"].isin(PERMNOS.values())]
 
 
 # Add overnight (previous close to open) and intraday (open to close) returns
@@ -30,21 +36,20 @@ def split_legs(df):
     return df
 
 
-# FRED DTB3, annual % on a discount basis
-def load_tbill():
-    return pd.read_parquet(RAW / "tbill3m_fred.parquet")["DTB3"].dropna()
+# Fama-French daily risk-free rate, already a daily return in decimals
+def load_rf():
+    rf = pd.read_csv(RF_FILE, parse_dates=["date"]).set_index("date")["rf"]
+    return rf.dropna()
 
 
-# VIX close per NYSE session, CBOE first, then FRED, then the last close
-# CBOE open/high/low are unreliable before 2006 so only the close is used
+# VIX close per NYSE session, gaps filled with the last close
 def load_vix():
     import exchange_calendars as xc
 
-    cboe = pd.read_parquet(RAW / "vix_cboe.parquet")["close"]
-    fred = pd.read_parquet(RAW / "vix_fred.parquet")["VIXCLS"].dropna()
-    sessions = xc.get_calendar("XNYS", start="1990-01-01").sessions_in_range(cboe.index.min(), cboe.index.max())
+    vix = pd.read_csv(VIX_FILE, parse_dates=["date"]).set_index("date")["vix"].dropna()
+    sessions = xc.get_calendar("XNYS", start="1990-01-01").sessions_in_range(vix.index.min(), vix.index.max())
 
-    vix = cboe.reindex(sessions).fillna(fred.reindex(sessions)).ffill()
+    vix = vix.reindex(sessions).ffill()
     vix.index.name = "date"
     return vix.rename("vix")
 
@@ -60,56 +65,31 @@ def load_processed(name):
     return pd.read_parquet(PROCESSED / f"{name}.parquet")
 
 
-# Yahoo prices are split-adjusted back in time, undo that so they match CRSP
-# Close is split-adjusted only and Adj Close also has dividends, so ret comes
-# from Adj Close and retx from Close
-def _yfinance(ticker):
-    raw = pd.read_parquet(RAW / f"yf_{ticker}.parquet").sort_index()
-    split = raw["stock_splits"].replace(0, 1.0).fillna(1.0)
-
-    # splits still to come after each date, e.g. 2.0 before a 2:1 split
-    later = split[::-1].cumprod()[::-1].shift(-1, fill_value=1.0)
-
-    df = pd.DataFrame({"date": raw.index, "ticker": ticker})
-    for c in ["open", "high", "low", "close"]:
-        df[c] = (raw[c] * later).to_numpy()
-
-    df["bid"] = np.nan
-    df["ask"] = np.nan
-    df["ret"] = raw["adj_close"].pct_change(fill_method=None).to_numpy()
-    df["retx"] = raw["close"].pct_change(fill_method=None).to_numpy()
-    df["volume"] = (raw["volume"] / later).to_numpy()
-    df["dividend"] = (raw["dividends"] * later).to_numpy()
-    df["split_factor"] = split.to_numpy()
-    return df
-
-
-# Legacy CRSP daily file (crsp.dsf) from download_wrds.py, not run on real data yet
-# prc, askhi and bidlo are negative when CRSP filled them from quotes, signs are
-# dropped here and checks.py flags those days
+# CRSP v2 daily file, matched on PERMNO only since tickers change (QQQ was QQQQ)
 def _crsp(tickers):
-    raw = pd.read_parquet(RAW / "crsp_dsf.parquet")
     names = {v: k for k, v in PERMNOS.items()}
-    raw = raw[raw["permno"].isin([PERMNOS[t] for t in tickers])].copy()
-    raw["date"] = pd.to_datetime(raw["date"])
-    raw = raw.sort_values(["permno", "date"])
+    raw = load_crsp_raw()
+    raw = raw[raw["PERMNO"].isin([PERMNOS[t] for t in tickers])]
 
-    df = pd.DataFrame({"date": raw["date"], "ticker": raw["permno"].map(names)})
-    df["open"] = raw["openprc"].abs()
-    df["high"] = raw["askhi"].abs()
-    df["low"] = raw["bidlo"].abs()
-    df["close"] = raw["prc"].abs()
-    df["bid"] = raw["bid"]
-    df["ask"] = raw["ask"]
-    df["ret"] = pd.to_numeric(raw["ret"], errors="coerce")
-    df["retx"] = pd.to_numeric(raw["retx"], errors="coerce")
-    df["volume"] = raw["vol"]
+    # the export repeats a few rows exactly, keep one of each
+    raw = raw.drop_duplicates().sort_values(["PERMNO", "DlyCalDt"])
 
-    # cfacpr changes on a split's ex-date, the ratio gives the split
-    prev_cfac = raw.groupby("permno")["cfacpr"].shift()
-    df["split_factor"] = (prev_cfac / raw["cfacpr"]).fillna(1.0)
+    df = pd.DataFrame({"date": raw["DlyCalDt"], "ticker": raw["PERMNO"].map(names)})
+    df["open"] = raw["DlyOpen"]
+    df["high"] = raw["DlyHigh"]
+    df["low"] = raw["DlyLow"]
+    df["close"] = raw["DlyPrc"]  # DlyClose, or the bid/ask midpoint on a day with no trade
+    df["bid"] = raw["DlyBid"]
+    df["ask"] = raw["DlyAsk"]
+    df["ret"] = raw["DlyRet"]
+    df["retx"] = raw["DlyRetx"]
+    df["volume"] = raw["DlyVol"]
 
-    # dsf has no dividend amount, back it out of ret - retx
+    # the cumulative price factor drops on a split's ex-date, the ratio gives the split
+    prev_cfac = raw.groupby("PERMNO")["DlyCumFacPr"].shift()
+    df["split_factor"] = (prev_cfac / raw["DlyCumFacPr"]).fillna(1.0)
+
+    # no dividend amount in the file, back it out of ret - retx
     prev_close = df.groupby("ticker")["close"].shift()
     df["dividend"] = ((df["ret"] - df["retx"]) * prev_close / df["split_factor"]).fillna(0.0)
     df.loc[df["dividend"].abs() < 1e-6, "dividend"] = 0.0
