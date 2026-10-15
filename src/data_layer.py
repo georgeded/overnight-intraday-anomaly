@@ -43,13 +43,28 @@ def split_legs(df):
 # which WRDS rounds to 4 decimals (whole basis points per day) and is too coarse.
 def load_rf():
     if TBILL_FILE.exists():
-        bill = pd.read_csv(TBILL_FILE, parse_dates=["date"]).set_index("date")["tb_m3"].dropna()
-        return tbill_to_daily(bill)
+        return tbill_to_daily(read_tbill())
 
     import warnings
     warnings.warn("wrds_tbill3m.csv not found: using the rounded Fama-French rf", stacklevel=2)
     rf = pd.read_csv(RF_FILE, parse_dates=["date"]).set_index("date")["rf"]
     return rf.dropna()
+
+
+# The T-bill file from the download script or a WRDS web query: a date column and one rate
+# column. Column names differ between the two, so match them case-insensitively.
+TBILL_COLUMNS = ["tb_m3", "tbsm3m", "dtb3", "tb3ms"]
+
+
+def read_tbill():
+    df = pd.read_csv(TBILL_FILE)
+    cols = {c.lower(): c for c in df.columns}
+    date = next((cols[c] for c in ["date", "caldt"] if c in cols), None)
+    rate = next((cols[c] for c in TBILL_COLUMNS if c in cols), None)
+    if date is None or rate is None:
+        raise SystemExit(f"{TBILL_FILE.name}: need a date column and one of {TBILL_COLUMNS}, got {list(df.columns)}")
+    bill = df.set_index(pd.to_datetime(df[date]))[rate]
+    return pd.to_numeric(bill, errors="coerce").dropna().sort_index()
 
 
 # T-bill rate (annual %, bank-discount basis) -> return per NYSE session.
