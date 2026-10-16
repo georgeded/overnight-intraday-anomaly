@@ -7,7 +7,7 @@ import pandas as pd
 
 from checks import NYSE, flag_panel, md_table
 from config import END, ROOT, SAMPLES
-from data_layer import TBILL_FILE, load_prices, load_rf, save_processed
+from data_layer import TBILL_EXT_FILE, TBILL_FILE, load_prices, load_rf, save_processed
 
 
 # data_layer.load_rf gives the return from the previous session to today
@@ -146,7 +146,8 @@ def report(source="crsp"):
            "- `ret`: CRSP `DlyRet`, close-to-close total return with dividends",
            "- `intraday = close / open - 1` (same-day CRSP `DlyOpen` and `DlyPrc`, unadjusted)",
            "- `overnight = (1 + ret) / (close / open) - 1`: previous close to open, so the dividend and any split adjustment sit here",
-           ("- `rf`: 3-month T-bill (`wrds_tbill3m.csv`, Fed H.15, annual % on a discount basis) converted to a "
+           ("- `rf`: 3-month T-bill (`wrds_tbill3m.csv`, Fed H.15, extended by FRED DTB3 in "
+            f"`{TBILL_EXT_FILE.name}` after 2025-02-11; annual % on a discount basis) converted to a "
             "return from the previous session's close to today's close: bill price = 1 - d·91/360, 91-day return "
             "1/price - 1, compounded per calendar day, using the rate known at the previous close."
             if TBILL_FILE.exists() else
@@ -176,9 +177,10 @@ def report(source="crsp"):
            f"`rf_intraday` is 0 on every day: {rf['intraday_zero']}",
            f"- Largest error in `overnight_xs = overnight - rf`: {rf['xs_check']:.1e}",
            "- Mean rf by calendar days covered (the T-bill rf accrues per calendar day, so a Friday-to-Monday "
-           "period earns about three times a weekday; the Fama-French rf is per trading day):", "",
+           "period earns about three times a weekday):", "",
            md_table(rf["by_day"], "{:.3f}"), "",
-           "Annual levels and the 4-decimal rounding of the rf file are in the step 2 report (section 9).", ""]
+           "Annual levels, source coverage, the WRDS/FRED overlap audit and comparison with the old rounded "
+           "Fama-French file are in the step 2 report (section 9).", ""]
     out += [NOTES]
 
     p = ROOT / "reports" / "step3_returns.md"
@@ -200,8 +202,9 @@ NOTES = """## Notes and decisions
 - `rf` is per close-to-close period and is assigned entirely to the overnight leg, as before:
   `rf_overnight = rf`, `rf_intraday = 0`, and `overnight_xs = overnight - rf_overnight`,
   `intraday_xs = intraday` (arithmetic excess returns).
-- The rf file is rounded to whole basis points per day (step 2), so annual rf is off by up to about
-  1 percentage point in some years. This feeds every excess return built here.
+- WRDS H.15 supplies the T-bill through 2025-02-11; FRED DTB3 supplies 221 later values from
+  2025-02-12 through 2025-12-31. An archived-source check found exact agreement on all 8,033
+  overlapping observations (largest difference 0, with no dates missing from either source).
 - Nothing is dropped: flagged days stay in the file and later steps choose whether to exclude them.
 """
 

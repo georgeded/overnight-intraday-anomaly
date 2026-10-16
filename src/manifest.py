@@ -12,11 +12,23 @@ SOURCES = {
     "wrds_vix.csv": ("WRDS CBOE", "VIX index, vix column = close"),
     "ff_rf_daily.csv": ("WRDS Fama-French", "daily factors, rf = daily risk-free return in decimals"),
     "wrds_tbill3m.csv": ("WRDS FRB H.15", "3-month T-bill, secondary market, annual % discount basis"),
+    "fred_dtb3_extension.csv": (
+        "FRED",
+        "DTB3 extension, 3-month T-bill annual % discount basis, 2025-02-12 to 2025-12-31",
+    ),
 }
 
 # Date column and first date each file must cover
-DATE_COL = {"crsp_daily.csv": "DlyCalDt", "wrds_vix.csv": "date", "ff_rf_daily.csv": "date", "wrds_tbill3m.csv": "date"}
-REQUIRED = {"crsp_daily.csv": "1993-01-29", "wrds_vix.csv": "1993-01-04", "ff_rf_daily.csv": "1993-01-04"}
+DATE_COL = {
+    "crsp_daily.csv": "DlyCalDt",
+    "wrds_vix.csv": "date",
+    "ff_rf_daily.csv": "date",
+    "wrds_tbill3m.csv": "date",
+    "fred_dtb3_extension.csv": "date",
+}
+REQUIRED = {"crsp_daily.csv": "1993-01-29", "wrds_vix.csv": "1993-01-04", "ff_rf_daily.csv": "1993-01-04",
+            "wrds_tbill3m.csv": "1993-01-01", "fred_dtb3_extension.csv": "2025-02-12"}
+MANIFEST_COLUMNS = ["file", "source", "series", "downloaded_utc", "rows", "first_date", "last_date", "sha256"]
 
 
 def sha256(path):
@@ -45,7 +57,8 @@ def describe(path):
 
 def build():
     rows = [describe(RAW / f) for f in SOURCES if (RAW / f).exists()]
-    man = pd.DataFrame(rows)
+    # Keep the CSV schema stable even if describe() or the source order changes.
+    man = pd.DataFrame(rows, columns=MANIFEST_COLUMNS)
 
     missing = sorted(set(REQUIRED) - set(man["file"]))
     late = [

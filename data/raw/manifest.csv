@@ -2,3 +2,5 @@ file,source,series,downloaded_utc,rows,first_date,last_date,sha256
 crsp_daily.csv,WRDS CRSP,"CRSP v2 daily stock file, PERMNO 84398 SPY, 86755 QQQ, 88222 IWM",2026-10-19 12:07,21478,1993-01-29,2025-12-31,a6712f386373edb38d88f6e491ee58e192a8d65fe9737b4ba9345a7de6d53404
 wrds_vix.csv,WRDS CBOE,"VIX index, vix column = close",2026-10-19 11:30,8534,1993-01-04,2026-09-30,567bde71c792c25696c604d20607c1b8ec845daaea79721ff3b6eef1d6cd2b9d
 ff_rf_daily.csv,WRDS Fama-French,"daily factors, rf = daily risk-free return in decimals",2026-10-19 11:59,8473,1993-01-04,2026-08-31,3117727a55a26e03697aab9c4bd7cbe724af7cd4258b16953364afbdb54ab7ba
+wrds_tbill3m.csv,WRDS FRB H.15,"3-month T-bill, secondary market, annual % discount basis",2026-10-19 14:11,11732,1993-01-01,2025-02-13,09abc07446b5e589b4feffe879f49c9b961235dd90c675afdc0ec73e974d47c8
+fred_dtb3_extension.csv,FRED,"DTB3 extension, 3-month T-bill annual % discount basis, 2025-02-12 to 2025-12-31",2026-10-19 14:12,221,2025-02-12,2025-12-31,974d48db812228d7df42561c2ce910ffdc20ff30de7cc6b802a121d2ee2d39f1

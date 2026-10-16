@@ -13,6 +13,7 @@ CRSP_FILE = RAW / "crsp_daily.csv"
 VIX_FILE = RAW / "wrds_vix.csv"
 RF_FILE = RAW / "ff_rf_daily.csv"
 TBILL_FILE = RAW / "wrds_tbill3m.csv"
+TBILL_EXT_FILE = RAW / "fred_dtb3_extension.csv"  # FRED DTB3 2025-02-12 to 2025-12-31, after WRDS ends
 BILL_DAYS = 91  # the 3-month bill is a 13-week bill
 
 
@@ -64,7 +65,14 @@ def read_tbill():
     if date is None or rate is None:
         raise SystemExit(f"{TBILL_FILE.name}: need a date column and one of {TBILL_COLUMNS}, got {list(df.columns)}")
     bill = df.set_index(pd.to_datetime(df[date]))[rate]
-    return pd.to_numeric(bill, errors="coerce").dropna().sort_index()
+    bill = pd.to_numeric(bill, errors="coerce").dropna().sort_index()
+
+    # FRED values only for dates after the last WRDS value (they match on every overlapping day)
+    if TBILL_EXT_FILE.exists():
+        ext = pd.read_csv(TBILL_EXT_FILE, parse_dates=["date"]).set_index("date")["dtb3"]
+        ext = pd.to_numeric(ext, errors="coerce").dropna()
+        bill = pd.concat([bill, ext[ext.index > bill.index.max()]])
+    return bill.sort_index()
 
 
 # T-bill rate (annual %, bank-discount basis) -> return per NYSE session.
