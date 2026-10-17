@@ -95,7 +95,14 @@ def tbill_to_daily(bill):
 def load_vix():
     import exchange_calendars as xc
 
-    vix = pd.read_csv(VIX_FILE, parse_dates=["date"]).set_index("date")["vix"].dropna()
+    raw = pd.read_csv(VIX_FILE, parse_dates=["date"]).set_index("date")["vix"]
+    conflicts = raw.groupby(level=0).nunique(dropna=False)
+    conflicts = conflicts[conflicts > 1]
+    if len(conflicts):
+        raise ValueError(f"{VIX_FILE.name}: conflicting VIX closes on {list(conflicts.index.date)}")
+
+    # The WRDS export repeats two dates. Their VIX closes agree, so keep one.
+    vix = raw.groupby(level=0).first().dropna()
     sessions = xc.get_calendar("XNYS", start="1990-01-01").sessions_in_range(vix.index.min(), vix.index.max())
 
     vix = vix.reindex(sessions).ffill()

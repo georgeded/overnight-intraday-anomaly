@@ -6,11 +6,12 @@ import numpy as np
 import pandas as pd
 
 from checks import md_table
-from config import ROOT
+from config import END, ROOT
 from data_layer import load_processed, load_vix, save_processed
 from returns import sample_of
 
 WINDOW = 252
+MIN_INTRADAY_OBS = 250  # tolerate the few CRSP sessions with no opening price
 PCT = 0.20
 SIGNALS = ["sig_a", "sig_b", "sig_c", "sig_ac", "sig_bc"]
 # checked in the look-ahead tests, the signals plus their thresholds
@@ -18,8 +19,8 @@ TESTED = SIGNALS + ["intraday_q20", "vix_median"]
 
 
 # Rolling statistic over the WINDOW values before each date
-def _past(series, fn, lag=1):
-    return fn(series.shift(lag).rolling(WINDOW, min_periods=WINDOW))
+def _past(series, fn, lag=1, min_periods=WINDOW):
+    return fn(series.shift(lag).rolling(WINDOW, min_periods=min_periods))
 
 
 # lag=1 is the real signal
@@ -33,7 +34,10 @@ def compute_signals(ret, vix, lag=1):
         g = g[["date", "ticker", "intraday"]].copy()
         intra = g["intraday"]
 
-        g["intraday_q20"] = _past(intra, lambda r: r.quantile(PCT), lag).to_numpy()
+        intraday_q20 = _past(intra, lambda r: r.quantile(PCT), lag, min_periods=MIN_INTRADAY_OBS)
+        # Tolerate missing opens, but never shorten the 252-session lookback itself.
+        intraday_q20.iloc[:WINDOW] = np.nan
+        g["intraday_q20"] = intraday_q20.to_numpy()
         g["vix"] = v.reindex(g["date"]).to_numpy()
         g["vix_median"] = vix_med.reindex(g["date"]).to_numpy()
         g["trade_date"] = g["date"].shift(-1)  # night from date's close to trade_date's open
@@ -194,15 +198,18 @@ def report(source="crsp"):
            "In step 5, `signal(t)` is paired with `overnight` on the `trade_date` row.", "",
            "- `sig_a`: intraday(t) < 0",
            "- `sig_b`: intraday(t) ≤ 20th percentile (linear interpolation) of the same ETF's intraday returns over "
-           "the previous 252 sessions, t-252 to t-1 (today is excluded from its own window)",
+           f"the previous {WINDOW} sessions, t-{WINDOW} to t-1 (today is excluded from its own window). The "
+           f"threshold requires at least {MIN_INTRADAY_OBS} observed opens, so the few CRSP sessions with no open "
+           "do not suppress the signal for a full year",
            "- `sig_c`: VIX close(t) > median VIX close over the previous 252 NYSE sessions, t-252 to t-1. VIX is the "
-           "CBOE close per NYSE session, gaps filled from FRED (see `data_layer.load_vix`); the same series for all ETFs",
+           "WRDS CBOE close per NYSE session, with missing sessions carried forward (see `data_layer.load_vix`); "
+           "the same series for all ETFs",
            "- `sig_ac` = `sig_a` AND `sig_c`; `sig_bc` = `sig_b` AND `sig_c`. These five are the only candidates, "
            "fixed before any returns were examined. A combination is NA if either part is NA.",
-           "- Until a full 252-day window exists the signal is missing (NA), not False. "
+           f"- Until a {WINDOW}-session window exists the signal is missing (NA), not False. "
            f"First `sig_b`: {timing['first_sig_b']}. First `sig_c`: {timing['first_sig_c']}.",
            "- `sample` is the sample of the night traded (`trade_date`), so a signal on 2012-12-31 belongs to validation.",
-           "- The last day in the sample (2026-10-02) has no next night inside the sample and is left out.",
+           f"- The last day in the sample ({END}) has no next night inside the sample and is left out.",
            "- Step 3 now assigns all T-bill interest to the overnight leg (`rf_overnight = rf`, `rf_intraday = 0`, "
            "`overnight_xs`, `intraday_xs`).", "",
            "## Look-ahead tests", "",

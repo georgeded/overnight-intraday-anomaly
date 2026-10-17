@@ -23,4 +23,4 @@ SAMPLES = {
 END = "2025-12-31"
 
 # Signal picked on validation in step 7, frozen before the test run
-CHOSEN_SIGNAL = "sig_a"
+CHOSEN_SIGNAL = "sig_b"

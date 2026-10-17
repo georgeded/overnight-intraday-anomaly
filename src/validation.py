@@ -42,24 +42,17 @@ def train_vs_validation(perf_train, perf_val):
     return tab.loc[order, [f"{t} {n}" for t in TICKERS for n in ["train", "validation"]]].rename_axis("strategy")
 
 
-NOTES = """## What validation says (yfinance snapshot)
+NOTES = """## What CRSP validation says
 
-- **The pick is close.** `sig_a` wins with a mean Sharpe of 0.518 against 0.507 for `sig_b` at 1 bp (0.52 vs 0.51
-  at two decimals, so not a tie under the rule). The ranking would flip on small changes, so the choice says
-  little about which signal is genuinely better.
-- **The chosen signal is not consistent across ETFs.** `sig_a` beats always-overnight on Sharpe at 1 bp for SPY
-  (0.53 vs 0.41) and IWM (0.74 vs 0.39) but not QQQ (0.28 vs 0.82). Against random nights it sits at the
-  82nd (SPY), 22nd (QQQ) and 96th (IWM) percentile on annual return.
-- **Validation looks better for the signals than train did.** In train (step 6) every signal was at or below the
-  placebo median; in 2013-2018 several are above it, mostly for IWM. With five candidates, three ETFs and one
-  six-year sample, some of this is expected by chance; the test period decides.
-- **Nothing beats buy-and-hold in 2013-2018.** It was a strong, calm bull market: buy-and-hold made 9.5-16.7% a
-  year with Sharpe 0.61-1.01, and every overnight strategy is below it even at zero cost (breakeven vs
-  buy-and-hold is `-` throughout). Against cash, always-overnight breaks even at 1.6-2.5 bp per trade and `sig_a`
-  at 1.8-2.8 bp, because it trades less than half as often.
-- **Always-intraday** loses money at 1 bp on all three ETFs, as in train.
-- The Corwin-Schultz estimate (10-16 bp one-way on average) is still far above the real post-2001 spread of these
-  ETFs; see step 6.
+- **The fixed rule selects `sig_b`.** Its mean 1 bp Sharpe is 0.598, ahead of `sig_a` at 0.520; this is not a
+  rounding tie. `sig_b` ranks first on SPY and IWM among the candidates, while `sig_c` is best on QQQ.
+- **The result is much better than `sig_b`'s train performance, especially for IWM.** At zero cost its annual-return
+  placebo percentiles are 90% for SPY, 55% for QQQ and 98% for IWM. This instability is a reason to keep the test
+  sample untouched until the rule is frozen, not evidence of a general edge.
+- **Nothing beats buy-and-hold in 2013-2018.** Buy-and-hold earns 9.5-16.7% a year with Sharpe 0.61-1.01. At
+  1 bp, `sig_b` earns 2.15-4.24% with Sharpe 0.29-0.97 and remains below buy-and-hold on every ETF.
+- **Quoted spreads are small in validation.** Mean one-way half-spreads are 0.24 bp for SPY and about 0.4 bp for
+  QQQ and IWM; the flat 1 bp selection cost is therefore conservative relative to the average quote.
 """
 
 

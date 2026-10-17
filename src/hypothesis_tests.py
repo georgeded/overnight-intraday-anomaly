@@ -303,31 +303,28 @@ def report(source="crsp"):
     return full, clean
 
 
-NOTES = """## What the train sample says (yfinance snapshot)
+NOTES = """## What the CRSP train sample says
 
-- **H1, overnight beats intraday: supported on the full train sample.** All three ETFs earn a positive overnight
-  excess return and a slightly negative intraday one; the gap is significant at 5% for SPY and IWM and 1% for QQQ,
-  and at 1% for all three once flagged days are excluded. It comes from 1993-2007. In 2008-2012 the gap is small
-  and not significant (except IWM at 10% without flagged days), but the change between the two periods is not
-  significant either, so a fall in the gap is suggested, not shown.
-- **H2, the signals do not pick better nights.** None of the 15 signal x ETF on/off gaps survives the Holm
-  correction. The raw gaps are mostly negative: when the day was bad and/or VIX was high, the next night earned
-  *less* on average (QQQ `sig_bc` -16 bp, p = 0.015 before correction). In the regression, today's intraday
-  return, `sig_b` and VIX level add almost nothing (R2 below 0.4%). QQQ's positive `sig_a` coefficient appears
-  only when the intraday return is also in the regression (the two are nearly collinear) and should not be read
-  as a standalone effect.
-- **H3, SPY vs IWM: no robust difference in how they respond.** The three slopes are jointly
-  insignificant (p = 0.84 on all days, 0.11 without flagged days). The four-coefficient test rejects because IWM's
-  average overnight return is higher than SPY's on the same nights, not because it reacts differently to the
-  signals. The one individually significant gap (`sig_ac`, p = 0.04-0.05) is one of many tests.
-- **Flagged days** do not change the conclusions; excluding them strengthens H1 and leaves H2/H3 null.
+- **H1, overnight beats intraday: supported on the full train sample.** The daily gaps are 3.25 bp for SPY,
+  8.82 bp for QQQ and 5.62 bp for IWM, all significant at 5% or better. The effect is concentrated in 1993-2007.
+  QQQ's decline in 2008-2012 is significant on all days; after excluding flagged rows, the declines for SPY and
+  QQQ are marginal at 10%.
+- **H2, the signals do not reliably pick better nights.** No signal-by-ETF on/off gap survives Holm correction
+  at 5%; QQQ `sig_bc` is only marginal at 10%. The main regression explains less than 0.4% of variance. QQQ's
+  positive `sig_a` coefficient appears only alongside the nearly collinear intraday return and is not a standalone
+  signal result.
+- **H3 is mixed but does not rescue the strategy.** On all days the SPY/IWM slope differences are jointly null
+  (p = 0.927). Excluding flagged rows rejects equality (p = 0.031), driven mainly by the VIX slope; the intercept
+  difference remains the dominant cross-ETF result.
+- **Flagged-day exclusion strengthens H1.** It reveals some slope heterogeneity, but it does not create a robust
+  conditional-return effect after multiple-testing correction.
 
 ## Notes
 
 - No parameters were tuned here: the signal definitions are the ones fixed in step 4, and the 5 candidates were
   fixed before any return was looked at.
-- Yahoo data. The step 2 caveats (stale opens in early SPY years, a possibly not-fully-ex-dividend open) apply and
-  will be re-checked on CRSP.
+- CRSP rows with unavailable return legs are naturally omitted by the regressions; the explicit backtest handling
+  is documented in step 6.
 """
 
 

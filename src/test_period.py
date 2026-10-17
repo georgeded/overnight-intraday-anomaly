@@ -1,4 +1,4 @@
-# Step 8: final test on 2019-2026, run once
+# Step 8: final test on 2019-2025, run once
 
 import pickle
 import subprocess
@@ -16,7 +16,7 @@ from hypothesis_tests import (BP, EXCLUDE_FLAGS, daily, h1, h2_main_table, h2_re
                               nights, nw_lags, stars)
 
 SAMPLE = "test"
-PERIODS = {"2019-2026": ("2019-01-01", END), "2019-2020": ("2019-01-01", "2020-12-31"), "2021+": ("2021-01-01", END)}
+PERIODS = {"2019-2025": ("2019-01-01", END), "2019-2020": ("2019-01-01", "2020-12-31"), "2021+": ("2021-01-01", END)}
 H4_PERIODS = {"2019-2020": PERIODS["2019-2020"], "2021+": PERIODS["2021+"]}
 RESULTS = PROCESSED / "step8_results.pkl"
 STRATS = ["buy_hold", "intraday", "overnight", f"on_{CHOSEN_SIGNAL}"]
@@ -209,10 +209,10 @@ def render(path=RESULTS, report=ROOT / "reports" / "step8_test.md", notes=""):
 NOTES = """## Note on this run
 
 The final test was first run once on Yahoo data (2019-01-01 to 2026-10-02, 2026-10-16). The project then
-switched to WRDS data only (CRSP prices, WRDS VIX, Fama-French daily rf), and the test is being run once more
-on CRSP for 2019-01-01 to 2025-12-31. Every rule is unchanged: signal `sig_a` chosen on validation, the step 6
-engine and cost grid, and the step 5 test code. The saved Yahoo result was moved out of `data/` to reset the
-run-once lock for this single CRSP run.
+switched to WRDS data (CRSP prices and quotes, WRDS VIX, and the WRDS/FRED T-bill), and this is the single CRSP
+run for 2019-01-01 to 2025-12-31. The fixed validation rule selected `sig_b`; the step 6 engine, cost grid and
+step 5 test code were frozen before this run. The saved Yahoo result was moved to `archive/yahoo/processed/`
+before the CRSP run-once lock was created.
 """
 
 

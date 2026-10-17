@@ -71,7 +71,9 @@ def corwin_schultz(g):
 # One-way cost from the closing bid and ask (CRSP), known at the previous close
 def quoted_half_spread(g):
     mid = (g["bid"] + g["ask"]) / 2
-    return ((g["ask"] - g["bid"]) / 2 / mid).where(mid > 0).shift(1)
+    spread = (g["ask"] - g["bid"]) / 2 / mid
+    # A crossed close cannot be a negative trading cost; treat it as unavailable.
+    return spread.where((mid > 0) & (g["ask"] >= g["bid"])).shift(1)
 
 
 # Daily frame for one ETF over its common window inside the sample
@@ -92,10 +94,17 @@ def legs(ret, sig, ticker, sample="train", window=None):
         g = g[(g["date"] >= window[0]) & (g["date"] <= window[1])].reset_index(drop=True)
 
     assert sample == "all" or set(g["sample"]) == {sample}
+    missing_legs = ~g[["overnight", "intraday", "ret", "rf"]].notna().all(axis=1)
+    excluded_missing_legs = int(missing_legs.sum())
+    g = g[~missing_legs].reset_index(drop=True)
+
+    # If a signal needs an unavailable CRSP open, do not initiate that strategy's trade.
+    g["missing_signal"] = g[SIGNALS].isna().any(axis=1)
+    for c in SIGNALS:
+        g[c] = g[c].astype("boolean").fillna(False).astype(bool)
     assert g[SIGNALS].notna().all().all()
 
-    for c in SIGNALS:
-        g[c] = g[c].astype(bool)
+    g["excluded_missing_leg_days"] = excluded_missing_legs
     g["cost_spread"] = g["cost_spread"].ffill().bfill()
     return g, spread_source
 
@@ -221,6 +230,8 @@ def backtest(source="crsp", sample="train", signals=SIGNALS, window=None):
 
         windows.append({"ticker": t, "first_day": g["date"].min().date(), "last_day": g["date"].max().date(),
                         "days": len(g), "years": yrs,
+                        "excluded_missing_leg_days": int(g["excluded_missing_leg_days"].iloc[0]),
+                        "days_with_missing_signal": int(g["missing_signal"].sum()),
                         "mean_spread_cost_bp": g["cost_spread"].mean() * 1e4,
                         "median_spread_cost_bp": g["cost_spread"].median() * 1e4, "spread_source": spread_src})
         strats = strategies(g, signals)
@@ -295,8 +306,12 @@ SETUP = [
     "the end. Holding one night = buy at the close, sell at the next open = 2 trades. Cost is per trade, "
     "one-way, as a fraction of the position.",
     "- `on_<signal>` holds the overnight leg of day d when the signal computed at the close of d-1 is on.",
-    "- Spread estimate: half of the Corwin-Schultz (2012) high-low spread, averaged over the previous 21 days, "
-    "used as the one-way cost of every trade (closing bid/ask is used instead when the source has it, i.e. CRSP).",
+    "- A row with no overnight or intraday leg is excluded because an open-to-close strategy cannot be evaluated. "
+    "After signal warm-up, an unavailable signal input means that strategy stays in cash for that night. Counts "
+    "for both cases are reported in each window.",
+    "- Spread estimate: CRSP uses the previous valid closing quoted half-spread. Crossed quotes are invalid rather "
+    "than negative costs and carry the last valid value forward. Without quotes, half of the Corwin-Schultz (2012) "
+    "high-low estimate, averaged over the previous 21 days, is used.",
     "- Sharpe: annualised mean daily return in excess of the T-bill over its standard deviation, × √252. "
     "Annual return: compounded, over years = days / 252. Max drawdown on the daily equity curve.",
     "- Breakeven cost: per-trade cost at which the strategy's annual return falls to that of cash (T-bill) or "
@@ -314,7 +329,7 @@ def body(perf, be, plc, win, spread_tab, eng):
 
     out = ["Common window per ETF:", "",
            md_table(win, "{:.2f}"), "",
-           "Corwin-Schultz one-way cost by year (bp, mean of the daily estimate):", "",
+           "One-way spread cost by year (bp, mean; CRSP uses the closing quoted half-spread):", "",
            md_table(spread_tab.round(1).astype(object).where(spread_tab.notna(), ""), "{:.1f}"), "",
            "Engine checks (SPY window):", "", md_table(eng, "{:.8f}"), ""]
 
@@ -358,29 +373,20 @@ def _flat(df):
     return df[[f"{t} vs {b}" for b in ["cash", "B&H"] for t in TICKERS]]
 
 
-NOTES = """## What the train backtest says (yfinance snapshot)
+NOTES = """## What the CRSP train backtest says
 
-- **Before costs, always-overnight beats buy-and-hold on every ETF**, with a higher return, about twice the
-  Sharpe ratio and a smaller drawdown (SPY 10.2% a year, Sharpe 0.68, max drawdown -33%, against 7.9%, 0.33,
-  -55%). Always-intraday is the worst strategy on all three ETFs.
-- **But it trades 504 times a year, so costs decide.** It stops beating cash at about 1-1.7 bp per trade and stops
-  beating buy-and-hold at 0.4 bp (SPY) to 2.2 bp (QQQ, whose buy-and-hold starts at the March 2000 peak). At 2 bp
-  per trade it is already at or below cash.
-- **None of the five signals adds value.** At zero cost, every conditional strategy has a lower Sharpe ratio than
-  always-overnight, and against the placebo of random nights the signals sit at or below the median: no signal
-  beats more than about two thirds of the random draws (best: SPY `sig_c`, 65th percentile on annual return but
-  43rd on Sharpe). `sig_bc` is in the bottom 3% on annual return for all three ETFs, and `sig_b` and `sig_ac` for
-  QQQ and `sig_ac` for IWM are in the bottom 6%.
-  So the nights the signals pick are, if anything, worse than random, matching step 5.
-- **The spread estimate is not usable as a realistic cost for these ETFs.** Corwin-Schultz gives one-way costs
-  of 8-35 bp for SPY, which is close to the tick-size spread of the mid-1990s but far above SPY's quoted spread
-  after decimalisation (2001), where it is well under 1 bp one-way. The estimator picks up intraday volatility
-  (it peaks in 2008) and is known to overstate spreads for very liquid securities. Results with it are shown for
-  completeness but are a pessimistic bound; the flat 0-10 bp grid and the breakeven costs are the ones to read.
-  CRSP's closing bid/ask will replace it automatically once loaded.
+- **Before costs, always-overnight beats buy-and-hold on every ETF.** Annual returns are 10.28% for SPY, 8.59%
+  for QQQ and 10.57% for IWM, with Sharpe ratios of 0.69, 0.47 and 0.70. Always-intraday is the worst leg.
+- **Costs remove the advantage.** Always-overnight trades about 504 times a year and breaks even with cash at
+  only 1.22-1.65 bp per trade. At 2 bp its annual return is at or below zero for all three ETFs.
+- **None of the five conditional signals adds reliable train-sample value.** Their zero-cost Sharpe ratios are
+  below always-overnight, and most placebo rankings are below the median. `sig_b` is especially weak in train,
+  with annual-return percentiles of 21% (SPY), 1% (QQQ) and 11% (IWM).
+- **Quoted spread costs are highly skewed in the early sample.** Full-window medians are about 0.6 bp for SPY,
+  1.1 bp for QQQ and 0.7 bp for IWM, while pre-decimalisation observations lift the means to 3-6 bp. Crossed
+  closes are treated as unavailable and carry the previous valid quote; they never become negative costs.
 - Placebo percentiles are shown at 0 bp only. With a flat cost every draw pays the same per night, so the ranking
-  is identical at 1-10 bp. With the spread estimate the ranking would mostly reflect that signal nights fall on
-  high-volatility days, where the estimate is larger, rather than the signal itself.
+  is identical at 1-10 bp.
 """
 
 

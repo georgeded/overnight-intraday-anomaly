@@ -94,6 +94,21 @@ def ohlc_violations(df):
     return df[bad]
 
 
+def quote_checks(df):
+    rows = []
+    for ticker, g in df.groupby("ticker"):
+        quoted = g["bid"].notna() & g["ask"].notna()
+        rows.append({
+            "ticker": ticker,
+            "rows": len(g),
+            "both_quotes": int(quoted.sum()),
+            "missing_either": int((~quoted).sum()),
+            "crossed_ask_lt_bid": int((quoted & (g["ask"] < g["bid"])).sum()),
+            "locked_ask_eq_bid": int((quoted & (g["ask"] == g["bid"])).sum()),
+        })
+    return pd.DataFrame(rows)
+
+
 def with_prev_close(df):
     df = split_legs(df)
     # previous close in today's share units so splits don't look like gaps
@@ -239,9 +254,12 @@ def vix_checks():
     v = v[v.index <= END]
     cal = sessions(v.index.min(), END)
     close = v["vix"]
+    duplicate_dates = pd.DatetimeIndex(v.index[v.index.duplicated(keep=False)].unique())
+    conflicting_closes = [d.date() for d, g in close.groupby(level=0) if g.nunique(dropna=False) > 1]
 
     return {
         "rows": len(v), "first": v.index.min().date(), "last": v.index.max().date(),
+        "duplicate_dates": list(duplicate_dates.date), "conflicting_closes": conflicting_closes,
         "nan_close": list(close[close.isna()].index.date),
         "missing_sessions": list(cal.difference(close.dropna().index).date),
         "non_session_rows": list(v.index.difference(cal).date),
@@ -325,6 +343,7 @@ def report(source="crsp"):
     raw = raw_checks()
     cov = coverage(df)
     dup, bad, ohlc = duplicates(df), bad_prices(df), ohlc_violations(df)
+    quotes = quote_checks(df)
     stale = stale_opens(df)
     ext = extreme_moves(df)
     rev = reversals(df)
@@ -362,7 +381,9 @@ def report(source="crsp"):
                                 non_session_rows=cov["non_session_rows"].map(short_list))), ""]
     out += [f"Duplicate (ticker, date) rows after loading: **{len(dup)}**. "
             f"Zero, negative or NaN prices or zero volume: **{len(bad)}**. "
-            f"High < low, or open/close outside [low, high]: **{len(ohlc)}**.", ""]
+            f"High < low, or open/close outside [low, high]: **{len(ohlc)}**.", "",
+            "Closing quote availability (crossed quotes are unusable as spreads and are carried forward in the "
+            "backtest):", "", md_table(quotes), ""]
 
     out += ["## 3. Stale opens (open == previous close)", "",
             f"{len(stale)} rows in total. Share of days per year:", "",
@@ -392,6 +413,8 @@ def report(source="crsp"):
     out += ["## 8. VIX (`wrds_vix.csv`, column `vix`)", "",
             f"- {vix['rows']} rows, {vix['first']} to {vix['last']}; range {vix['min']:.2f} to {vix['max']:.2f} "
             f"(max on {vix['max_date']}); values at or below zero: {vix['non_positive']}",
+            f"- Duplicate dates: {short_list(vix['duplicate_dates'])}; conflicting VIX closes on those dates: "
+            f"{short_list(vix['conflicting_closes'])}. One copy is kept when the close agrees.",
             f"- Rows with no close: {short_list(vix['nan_close'])}",
             f"- NYSE sessions with no close: {short_list(vix['missing_sessions'])} (filled with the previous close)",
             f"- Rows on non-NYSE days: {short_list(vix['non_session_rows'])} (dropped)",
@@ -444,6 +467,7 @@ DECISIONS = """## 10. Decisions
 | Splits | From the drop in `DlyCumFacPr`: QQQ 2:1 on 2000-03-20 and IWM 2:1 on 2005-06-09, both showing ordinary moves. |
 | Half-days | Kept and flagged (`flag_half_day`). |
 | VIX | `vix` column (close) on NYSE sessions only. Rows on market holidays are dropped, and the 2 NYSE sessions with no value carry the previous close forward. The 7 moves above 50% are all known shocks (2007-02-27, 2018-02-05, 2021-01-27, 2021-11-26, 2024-08-05, 2024-12-18, 2025-04-04). The open (`vixo`) has obvious errors (two days above twice the close) and is not used. |
+| Closing bid/ask | Used for CRSP transaction-cost estimates. Locked quotes imply a zero quoted spread. Crossed quotes are treated as unavailable, never as negative costs; the backtest carries the last valid half-spread forward. |
 | Risk-free rate | WRDS/FRED DTB3 is converted from its annual bank-discount yield to a 91-day bill holding return, then to a return over the calendar days between NYSE closes using the rate available at the previous close. All rf is assigned to the overnight leg. The old 4-decimal Fama-French file is retained only for comparison; its rounding materially distorted low-rate years. The two T-bill sources matched exactly over 8,033 archived overlapping observations, and the FRED extension is used only after WRDS ends. |
 | Sample end | 2025-12-31, the last CRSP day and the last FRED extension value. VIX goes further and is cut there. |
 """
