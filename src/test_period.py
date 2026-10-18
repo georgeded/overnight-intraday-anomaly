@@ -186,7 +186,7 @@ def render(path=RESULTS, report=ROOT / "reports" / "step8_test.md", notes=""):
 
     a, b = res["periods"][next(iter(res["periods"]))]
     out = [f"# Step 8: final test ({res['source']}, {a} to {b})", "",
-           f"Computed once by `python src/test_period.py run` at {res['run_utc']} UTC on commit `{res['commit']}`; "
+           f"Computed by `python src/test_period.py run` at {res['run_utc']} UTC on commit `{res['commit']}`; "
            "this report is rendered from the saved results (`python src/test_period.py report`). Everything was "
            f"frozen beforehand: signal `{res['signal']}` (`config.CHOSEN_SIGNAL`, step 7), the step 6 engine and "
            "cost grid, and the step 5 test code. Nothing was changed after the run.", ""]
