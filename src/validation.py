@@ -44,15 +44,19 @@ def train_vs_validation(perf_train, perf_val):
 
 NOTES = """## What CRSP validation says
 
-- **The fixed rule selects `sig_b`.** Its mean 1 bp Sharpe is 0.598, ahead of `sig_a` at 0.520; this is not a
-  rounding tie. `sig_b` ranks first on SPY and IWM among the candidates, while `sig_c` is best on QQQ.
-- **The result is much better than `sig_b`'s train performance, especially for IWM.** At zero cost its annual-return
-  placebo percentiles are 90% for SPY, 55% for QQQ and 98% for IWM. This instability is a reason to keep the test
-  sample untouched until the rule is frozen, not evidence of a general edge.
+- **The fixed rule selects `sig_c`** (VIX above its one-year median, using the previous close). Its mean 1 bp
+  Sharpe is 0.595, well ahead of `sig_ac` at 0.407. It is the best candidate on all three ETFs. Because it only
+  uses VIX, it holds the same 693 nights on every ETF.
+- **This is a different pick from the same-close version of the signals, which chose `sig_b`.** The rule is
+  unchanged, but the signals now use data up to the previous close. That change was made after the first CRSP
+  test run had been seen, so the step 8 results for `sig_c` are not a clean out-of-sample test.
+- **`sig_c` was weak in train.** At 1 bp its train Sharpe was 0.17 (SPY), 0.00 (QQQ) and -0.07 (IWM), and its
+  placebo percentiles were 59, 26 and 7. Its validation strength (86th-95th percentile) is new in 2013-2018.
 - **Nothing beats buy-and-hold in 2013-2018.** Buy-and-hold earns 9.5-16.7% a year with Sharpe 0.61-1.01. At
-  1 bp, `sig_b` earns 2.15-4.24% with Sharpe 0.29-0.97 and remains below buy-and-hold on every ETF.
-- **Quoted spreads are small in validation.** Mean one-way half-spreads are 0.24 bp for SPY and about 0.4 bp for
-  QQQ and IWM; the flat 1 bp selection cost is therefore conservative relative to the average quote.
+  1 bp, `sig_c` earns 3.7-6.5% with Sharpe 0.48-0.72 and stays below buy-and-hold on every ETF, even at zero cost.
+  Against cash it breaks even at 2.3-3.5 bp per trade.
+- **Quoted spreads are small in validation**, well under 1 bp one-way on average, so the flat 1 bp selection cost
+  is conservative.
 """
 
 

@@ -173,7 +173,7 @@ def h4_section(h, label):
             md_table(h["h1"], "{:.2f}"), "",
             "Change in the overnight-intraday gap vs train (stacked regression, Newey-West):", "",
             md_table(h["h1_change"], "{:.2f}"), "",
-            "**H2 regression** `overnight_xs(t+1) = a + b1 intraday(t) + b2 sig_b(t) + b3 VIX(t)` by period:", "",
+            "**H2 regression** `overnight_xs(after t) = a + b1 intraday(t-1) + b2 sig_b(t) + b3 VIX(t-1)` by period:", "",
             md_table(h["h2"], "{:.2f}"), "",
             "Change in the H2 slopes vs train (pooled regression with period interactions, Newey-West; "
             "`p` tests all three slopes equal to train):", "",
@@ -209,19 +209,25 @@ def render(path=RESULTS, report=ROOT / "reports" / "step8_test.md", notes=""):
 
 
 # The Yahoo results and their summary are in the git history of reports/step8_test.md
-NOTES = """## Note on this run
+NOTES = """## Note on this run: not a clean out-of-sample test
 
-The final test was first run once on Yahoo data (2019-01-01 to 2026-10-02, 2026-10-16). The project then
-switched to WRDS data (CRSP prices and quotes, WRDS VIX, and the WRDS/FRED T-bill), and this is the single CRSP
-run for 2019-01-01 to 2025-12-31. The fixed validation rule selected `sig_b`; the step 6 engine, cost grid and
-step 5 test code were frozen before this run. The saved Yahoo result was moved to `archive/yahoo/processed/`
-before the CRSP run-once lock was created.
+This is the third CRSP run of the final test, and the method was changed after the earlier results had been seen.
 
-**Rerun to fix one bug (2026-10-19).** The first CRSP run (2026-10-19 14:35 UTC on `97b2d35`, results
-sha256 `0b642f3c2a453a90...`) left the SPY row of the H4 "change vs train" table empty: three SPY train days have no
-open, and that regression did not skip missing values. The only code change is that it now skips them. Signal,
-engine, costs, samples and seeds are unchanged, and every other number in this report is identical to the first
-run. The first results file is kept as `data/processed/step8_results_run1.pkl`.
+1. **First run** (2026-10-19 14:35 UTC, `97b2d35`, sha256 `0b642f3c2a453a90...`): signals measured at the same close they
+   trade at, validation picked `sig_b`. The SPY row of the H4 change-vs-train table was empty because of a bug.
+2. **Second run** (2026-10-19 15:52 UTC, `f35fa86`, sha256 `f6c7cd21e7f305b8...`): the same, with only that bug fixed.
+   Every other number was identical to the first run.
+3. **This run**, after two changes to the method:
+   - signals use data up to the previous close, so the order can be placed before the close, and
+   - the "excluding flagged days" runs drop only data problems (stale opens, bad prices, OHLC errors, half-days,
+     splits), no longer days flagged as extreme moves or reversals, which are judged from the returns themselves.
+
+   With the same selection rule, validation now picks `sig_c`. Both changes fix problems a reviewer raised, but
+   they were made after the 2019-2025 results for `sig_b` were known, so these results are a re-analysis of the
+   test period, not an untouched holdout. The earlier results files are kept as `step8_results_run1.pkl` and
+   `step8_results_run2.pkl`, and the earlier reports are in the git history.
+
+Before all of this the test was run once on Yahoo data (2019-01-01 to 2026-10-02, 2026-10-16).
 """
 
 

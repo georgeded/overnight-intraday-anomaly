@@ -18,8 +18,8 @@ BP = 1e4
 
 # Flags dropped in the clean run
 # Ex-dividend days stay since the dividend is part of the overnight return
-EXCLUDE_FLAGS = ["flag_stale_open", "flag_extreme", "flag_reversal", "flag_ohlc",
-                 "flag_bad_price", "flag_half_day", "flag_split"]
+# Only data problems and unusual sessions, never flags based on the size of the returns
+EXCLUDE_FLAGS = ["flag_stale_open", "flag_ohlc", "flag_bad_price", "flag_half_day", "flag_split"]
 
 
 # Newey-West (1994) rule of thumb
@@ -57,7 +57,7 @@ def daily(ret, exclude):
     return d[~d["flagged"]] if exclude else d
 
 
-# One row per signal night, regressors from day t and the overnight return of t+1
+# One row per signal night, regressors known at t-1's close and the overnight return after t
 def nights(ret, sig, exclude):
     keep = ["date", "ticker", "overnight_xs", "overnight", "flagged"]
     nxt = ret[keep].rename(columns={"date": "trade_date", "flagged": "flagged_next"})
@@ -260,7 +260,8 @@ def section(res, label):
         "Change in the overnight-intraday gap, 2008-2012 minus 1993-2007 (Newey-West):", "",
         md_table(res["h1_change"], "{:.2f}"), "",
         "### H2: what predicts the next night's overnight excess return", "",
-        "`overnight_xs(t+1) = a + b1 intraday(t) + b2 sig_b(t) + b3 VIX(t)`, Newey-West t-statistics.", "",
+        "`overnight_xs(after t) = a + b1 intraday(t-1) + b2 sig_b(t) + b3 VIX(t-1)`, Newey-West t-statistics. "
+        "`sig_b(t)` itself uses data up to t-1.", "",
         md_table(res["h2"], "{:.2f}"), "",
         "Same regression with each candidate dummy in place of `sig_b` (dummy coefficient only, bp):", "",
         md_table(res["h2_dummies"], "{:.2f}"), "",
@@ -287,7 +288,7 @@ def report(source="crsp"):
            "- Returns are excess returns: `overnight_xs = overnight - rf` (all T-bill interest on the overnight leg), "
            "`intraday_xs = intraday`.",
            f"- Newey-West lags: floor(4 (n/100)^(2/9)), e.g. {lags} for SPY's full train sample.",
-           "- H2 pairs signal(t) and regressors from day t with the overnight return from t's close to the next open.",
+           "- H2 pairs signal(t) and regressors known at t-1's close with the overnight return from t's close to the next open.",
            "- Rows with a missing regressor (before the 252-day windows fill) are dropped per regression.",
            f"- Excluding flagged days drops any day with {', '.join(f'`{f}`' for f in EXCLUDE_FLAGS)}; for H2 a night "
            "is dropped if either the signal day or the night's day is flagged. Ex-dividend days are kept, because "
@@ -306,25 +307,23 @@ def report(source="crsp"):
 NOTES = """## What the CRSP train sample says
 
 - **H1, overnight beats intraday: supported on the full train sample.** The daily gaps are 3.25 bp for SPY,
-  8.82 bp for QQQ and 5.62 bp for IWM, all significant at 5% or better. The effect is concentrated in 1993-2007.
-  QQQ's decline in 2008-2012 is significant on all days; after excluding flagged rows, the declines for SPY and
-  QQQ are marginal at 10%.
-- **H2, the signals do not reliably pick better nights.** No signal-by-ETF on/off gap survives Holm correction
-  at 5%; QQQ `sig_bc` is only marginal at 10%. The main regression explains less than 0.4% of variance. QQQ's
-  positive `sig_a` coefficient appears only alongside the nearly collinear intraday return and is not a standalone
-  signal result.
-- **H3 is mixed but does not rescue the strategy.** On all days the SPY/IWM slope differences are jointly null
-  (p = 0.927). Excluding flagged rows rejects equality (p = 0.031), driven mainly by the VIX slope; the intercept
-  difference remains the dominant cross-ETF result.
-- **Flagged-day exclusion strengthens H1.** It reveals some slope heterogeneity, but it does not create a robust
-  conditional-return effect after multiple-testing correction.
+  8.82 bp for QQQ and 5.62 bp for IWM, all significant at 5% or better, and concentrated in 1993-2007. Only QQQ's
+  decline in 2008-2012 is significant (5% on all days, 10% without flagged days).
+- **H2, the signals do not reliably pick better nights.** No signal-by-ETF on/off gap survives the Holm correction.
+  Before correction only QQQ `sig_a` stands out (+7.2 bp, p = 0.04). In the regression, IWM's previous intraday
+  return and `sig_b` have positive coefficients (t of about 2), but the regression explains less than 0.5% of the
+  variance for every ETF.
+- **H3, SPY vs IWM: no robust difference in how they respond.** The three slopes are jointly insignificant
+  (p = 0.18 on all days, 0.25 without flagged days). The four-coefficient test rejects because IWM's average
+  overnight return is higher. The one individually significant on/off gap (`sig_a`, p = 0.02) is one of many tests.
+- **Flagged days** (data problems only) do not change the conclusions. Excluding them slightly strengthens H1.
 
 ## Notes
 
-- No parameters were tuned here: the signal definitions are the ones fixed in step 4, and the 5 candidates were
-  fixed before any return was looked at.
-- CRSP rows with unavailable return legs are naturally omitted by the regressions; the explicit backtest handling
-  is documented in step 6.
+- Changed on 2026-10-19, after the first CRSP test run had been seen: the signals now use data up to the previous
+  close, and the "excluding flagged days" runs drop only data problems (stale opens, bad prices, OHLC errors,
+  half-days, splits), not days flagged as extreme moves or reversals, which are judged from the returns themselves.
+- The five candidate signals and their parameters are the ones fixed before any return was looked at.
 """
 
 

@@ -42,7 +42,7 @@ def positions(g, lag=0):
     s = g[SIG].astype(float)
 
     if lag:
-        s = s.shift(lag).fillna(0.0)  # yesterday's signal for tonight
+        s = s.shift(lag).fillna(0.0)  # lag=-1 gives the same-close version of the signal
 
     return {"buy_hold": (one, one), "overnight": (one, zero), "intraday": (zero, one),
             f"on_{SIG}": (s.to_numpy(), zero)}
@@ -266,9 +266,10 @@ def lagged(G, rng):
     for t, g0 in G.items():
         for split, (a, b) in SPLITS.items():
             g = window(g0, a, b)
-            for lag in [0, 1]:
+            for lag in [0, -1]:
                 p_on, p_in = positions(g, lag)[f"on_{SIG}"]
-                row = {"ticker": t, "sample": split, "signal": f"{SIG}(t)" if lag == 0 else f"{SIG}(t-1)"}
+                row = {"ticker": t, "sample": split,
+                       "signal": f"{SIG} from t-1 (used)" if lag == 0 else f"{SIG} from t (same close)"}
                 for c in COSTS:
                     m, _ = evaluate(g, p_on, p_in, c)
                     row[f"ann_% {c}bp"] = m["ann_ret_%"]
@@ -457,9 +458,10 @@ def report(source="crsp"):
             "## 6. With vs without flagged days", "",
             f"Days with any of {', '.join(f'`{f}`' for f in EXCLUDE_FLAGS)} removed from every strategy.", "",
             md_table(flg, "{:.2f}"), "",
-            "## 7. Signal lagged one day", "",
-            f"`{SIG}(t-1)`: tonight's position uses yesterday's signal instead of today's. This also removes the "
-            "close-timing concern from step 4 (the closing price is not known when a market-on-close order is sent).",
+            "## 7. Signal timing", "",
+            f"The signals use data up to the previous close, so the order can be placed before the close. For "
+            f"comparison, `{SIG} from t (same close)` uses the same day's close and VIX, which a market-on-close "
+            "order could not know in time.",
             "", md_table(lag, "{:.2f}"), "",
             "## 8. Volatility-scaled sizing", "",
             f"Weight = min(1, target / trailing vol): vol is the std of the leg's own returns over the previous "

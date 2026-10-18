@@ -375,16 +375,18 @@ def _flat(df):
 
 NOTES = """## What the CRSP train backtest says
 
-- **Before costs, always-overnight beats buy-and-hold on every ETF.** Annual returns are 10.28% for SPY, 8.59%
-  for QQQ and 10.57% for IWM, with Sharpe ratios of 0.69, 0.47 and 0.70. Always-intraday is the worst leg.
-- **Costs remove the advantage.** Always-overnight trades about 504 times a year and breaks even with cash at
-  only 1.22-1.65 bp per trade. At 2 bp its annual return is at or below zero for all three ETFs.
-- **None of the five conditional signals adds reliable train-sample value.** Their zero-cost Sharpe ratios are
-  below always-overnight, and most placebo rankings are below the median. `sig_b` is especially weak in train,
-  with annual-return percentiles of 21% (SPY), 1% (QQQ) and 11% (IWM).
+- **Before costs, always-overnight beats buy-and-hold on every ETF.** Annual returns are 10.26% for SPY, 8.62%
+  for QQQ and 10.58% for IWM, with Sharpe ratios of 0.69, 0.47 and 0.70. Always-intraday is the worst leg.
+- **Costs remove the advantage.** Always-overnight trades 504 times a year and breaks even with cash at only
+  1.23-1.65 bp per trade. At 2 bp its annual return is at or below zero for all three ETFs.
+- **The signals are inconsistent across ETFs.** On QQQ, `sig_a` and `sig_b` beat always-overnight on Sharpe
+  (0.63 and 0.56 against 0.47) and sit at the 96th and 97th placebo percentile. On SPY no signal beats
+  always-overnight, and on IWM every signal is weak (`sig_a` and `sig_c` at the 8th and 7th percentile). Step 5
+  finds no on/off gap that survives the multiple-testing correction.
 - **Quoted spread costs are highly skewed in the early sample.** Full-window medians are about 0.6 bp for SPY,
   1.1 bp for QQQ and 0.7 bp for IWM, while pre-decimalisation observations lift the means to 3-6 bp. Crossed
-  closes are treated as unavailable and carry the previous valid quote; they never become negative costs.
+  closes are treated as unavailable and carry the previous valid quote, so they never become negative costs.
+- Signals use data up to the previous close (changed on 2026-10-19, after the first CRSP test run, see step 8).
 - Placebo percentiles are shown at 0 bp only. With a flat cost every draw pays the same per night, so the ranking
   is identical at 1-10 bp.
 """
