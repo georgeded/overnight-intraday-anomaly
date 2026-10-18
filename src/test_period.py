@@ -45,6 +45,9 @@ def h1_change_vs_train(train, test, exclude, periods):
         a = daily(train, exclude)
         b = daily(test, exclude)
         g = pd.concat([a[a["ticker"] == t], b[b["ticker"] == t]]).sort_values("date")
+
+        # skip days with no open (three SPY train days), otherwise the whole regression is NaN
+        g = g[(g["overnight_xs"] - g["intraday_xs"]).notna()]
         y = (g["overnight_xs"] - g["intraday_xs"]).to_numpy()
 
         dummies = np.column_stack([((g["date"] >= p0) & (g["date"] <= p1)).to_numpy(float)
@@ -213,6 +216,12 @@ switched to WRDS data (CRSP prices and quotes, WRDS VIX, and the WRDS/FRED T-bil
 run for 2019-01-01 to 2025-12-31. The fixed validation rule selected `sig_b`; the step 6 engine, cost grid and
 step 5 test code were frozen before this run. The saved Yahoo result was moved to `archive/yahoo/processed/`
 before the CRSP run-once lock was created.
+
+**Rerun to fix one bug (2026-10-19).** The first CRSP run (2026-10-19 14:35 UTC on `97b2d35`, results
+sha256 `0b642f3c2a453a90...`) left the SPY row of the H4 "change vs train" table empty: three SPY train days have no
+open, and that regression did not skip missing values. The only code change is that it now skips them. Signal,
+engine, costs, samples and seeds are unchanged, and every other number in this report is identical to the first
+run. The first results file is kept as `data/processed/step8_results_run1.pkl`.
 """
 
 
