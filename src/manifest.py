@@ -1,4 +1,4 @@
-# Step 1: record what is in data/raw, with full SHA-256 hashes
+# Step 1: record source, coverage and SHA-256 of every raw file
 
 import hashlib
 from datetime import datetime, timezone
@@ -7,75 +7,32 @@ import pandas as pd
 
 from config import RAW
 
+# file: (source, description, date column, first date it must cover)
 SOURCES = {
-    "crsp_daily.csv": ("WRDS CRSP", "CRSP v2 daily stock file, PERMNO 84398 SPY, 86755 QQQ, 88222 IWM"),
-    "wrds_vix.csv": ("WRDS CBOE", "VIX index, vix column = close"),
-    "ff_rf_daily.csv": ("WRDS Fama-French", "daily factors, rf = daily risk-free return in decimals"),
-    "wrds_tbill3m.csv": ("WRDS FRB H.15", "3-month T-bill, secondary market, annual % discount basis"),
-    "fred_dtb3_extension.csv": (
-        "FRED",
-        "DTB3 extension, 3-month T-bill annual % discount basis, 2025-02-12 to 2025-12-31",
-    ),
+    "crsp_daily.csv": ("WRDS CRSP", "CRSP v2 daily, PERMNO 84398 SPY, 86755 QQQ, 88222 IWM", "DlyCalDt", "1993-01-29"),
+    "wrds_vix.csv": ("WRDS CBOE", "VIX index, vix column = close", "date", "1993-01-04"),
+    "wrds_tbill3m.csv": ("WRDS FRB H.15", "3-month T-bill, annual % discount basis", "date", "1993-01-01"),
+    "fred_dtb3_extension.csv": ("FRED", "DTB3 for 2025-02-12 to 2025-12-31, after WRDS ends", "date", "2025-02-12"),
 }
 
-# Date column and first date each file must cover
-DATE_COL = {
-    "crsp_daily.csv": "DlyCalDt",
-    "wrds_vix.csv": "date",
-    "ff_rf_daily.csv": "date",
-    "wrds_tbill3m.csv": "date",
-    "fred_dtb3_extension.csv": "date",
-}
-REQUIRED = {"crsp_daily.csv": "1993-01-29", "wrds_vix.csv": "1993-01-04", "ff_rf_daily.csv": "1993-01-04",
-            "wrds_tbill3m.csv": "1993-01-01", "fred_dtb3_extension.csv": "2025-02-12"}
-MANIFEST_COLUMNS = ["file", "source", "series", "downloaded_utc", "rows", "first_date", "last_date", "sha256"]
-
-
-def sha256(path):
-    h = hashlib.sha256()
-    h.update(path.read_bytes())
-    return h.hexdigest()
-
-
-def describe(path):
-    df = pd.read_csv(path, parse_dates=[DATE_COL[path.name]])
-    dates = df[DATE_COL[path.name]]
-    source, detail = SOURCES[path.name]
+def describe(name):
+    path = RAW / name
+    source, series, date_col, _ = SOURCES[name]
+    dates = pd.read_csv(path, parse_dates=[date_col])[date_col]
     mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-
-    return {
-        "file": path.name,
-        "source": source,
-        "series": detail,
-        "downloaded_utc": mtime.strftime("%Y-%m-%d %H:%M"),
-        "rows": len(df),
-        "first_date": dates.min().date(),
-        "last_date": dates.max().date(),
-        "sha256": sha256(path),
-    }
-
-
-def build():
-    rows = [describe(RAW / f) for f in SOURCES if (RAW / f).exists()]
-    # Keep the CSV schema stable even if describe() or the source order changes.
-    man = pd.DataFrame(rows, columns=MANIFEST_COLUMNS)
-
-    missing = sorted(set(REQUIRED) - set(man["file"]))
-    late = [
-        r["file"] for r in rows
-        if r["file"] in REQUIRED and pd.Timestamp(r["first_date"]) > pd.Timestamp(REQUIRED[r["file"]])
-    ]
-    return man, missing, late
-
+    return {"file": name, "source": source, "series": series, "downloaded_utc": mtime.strftime("%Y-%m-%d %H:%M"),
+            "rows": len(dates), "first_date": dates.min().date(), "last_date": dates.max().date(),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
 def main():
-    man, missing, late = build()
+    man = pd.DataFrame([describe(f) for f in SOURCES if (RAW / f).exists()])
     man.to_csv(RAW / "manifest.csv", index=False)
-
     print(man.to_string(index=False))
+
+    missing = [f for f in SOURCES if f not in set(man["file"])]
+    late = [r.file for r in man.itertuples() if pd.Timestamp(r.first_date) > pd.Timestamp(SOURCES[r.file][3])]
     print("missing files:", missing or "none")
     print("starting later than required:", late or "none")
-
 
 if __name__ == "__main__":
     main()
