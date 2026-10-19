@@ -477,41 +477,38 @@ def report(source="crsp"):
 
 NOTES = """## Summary
 
+- **Method change.** Since 2026-10-19 the signals use data up to the previous close and the flagged-day checks
+  drop only data problems. Both changes came after the first CRSP test results were seen (see step 8).
 - **Eras.** The overnight-minus-intraday gap is significant at 5% only in 1993-2007 for SPY (4.3 bp a day) and QQQ
-  (9.5 bp), with IWM at 5.8 bp (10%). In 2008-2020 it shrinks (SPY 1.2 bp, QQQ 1.8 bp, IWM 4.0 bp at 10%), and in
+  (9.7 bp), with IWM at 5.8 bp (10%). In 2008-2020 it shrinks (SPY 1.2 bp, QQQ 1.8 bp, IWM 4.0 bp at 10%), and in
   2021+ it is about zero for SPY and QQQ (-1.0 and -0.1 bp) while IWM keeps 6.1 bp (t = 1.6). Before costs,
   always-overnight has the best Sharpe in 7 of the 9 era/ETF cells, but at 1 bp per trade buy-and-hold has the best
-  Sharpe in every era from 2008 for SPY and QQQ. `sig_b` against random nights: 0th-84th percentile by era, with
+  Sharpe in every era from 2008 for SPY and QQQ. `sig_c` against random nights: 9th-74th percentile by era, with
   no consistent edge.
 - **Best 1% of days.** Every strategy depends heavily on its best days. Without its best 1% of nights,
-  always-overnight still earns 1-3% a year over the full sample (Sharpe 0.00-0.16), while buy-and-hold turns
-  negative because it loses its best 1% of whole days, which are larger.
-- **Weekends.** No evidence that weekend nights earn more. Over the full sample the weekend return per night is
-  lower than on weekday nights (not significant), and per calendar day it is much lower. In the test period SPY
-  and QQQ weekend nights were significantly *worse* than weekday nights (-11 and -14 bp, t = -2.1 and -2.3).
-  `sig_b` holds weekend nights in roughly the same proportion as all nights.
-- **Walk-forward re-pick.** The rule picks `sig_b` for 2019-2020 and then `sig_a` (2021, 2022, 2024), `sig_bc`
-  (2023) and `sig_c` (2025). Against frozen `sig_b` at 0 bp, the re-picked strategy is worse for SPY (Sharpe 0.20
-  vs 0.29) and better for QQQ (0.15 vs 0.13) and IWM (0.45 vs 0.31). The choice of signal is unstable.
+  always-overnight still earns 1-3% a year over the full sample (Sharpe 0.00-0.16) and `sig_c` 0.5-2.7%, while
+  buy-and-hold turns negative because it loses its best 1% of whole days, which are larger.
+- **Weekends.** No evidence that weekend nights earn more. In the test period SPY and QQQ weekend nights were
+  significantly *worse* than weekday nights (-11 and -14 bp, t = -2.1 and -2.3). `sig_c` holds weekend nights in
+  the same proportion as all nights.
+- **Walk-forward re-pick.** The rule picks `sig_c` in 6 of 7 years (`sig_b` in 2020). Even so, the re-picked
+  strategy does worse than frozen `sig_c` on every ETF (Sharpe at 0 bp 0.10 vs 0.35 for SPY, 0.11 vs 0.39 for QQQ,
+  0.32 vs 0.58 for IWM), because its one switch, in 2020, came at a bad time.
 - **Bootstrap.** At 1 bp per trade most Sharpe CIs include zero. Buy-and-hold's Sharpe is significantly positive in
-  validation and test for SPY and QQQ. `sig_b` is significantly positive only for IWM in validation, the sample it
-  was chosen on. Significant differences: always-overnight below buy-and-hold for SPY in the test, `sig_b` below
-  buy-and-hold for QQQ in the test, and `sig_b` below always-overnight for QQQ in train. No CI shows `sig_b` or any
-  overnight strategy beating buy-and-hold in the test.
-- **Flagged days.** Excluding them raises always-overnight returns in 7 of 9 sample/ETF cells. These flags include
-  `flag_extreme` and `flag_reversal`, which are based on the returns themselves, so this check is only indicative.
-- **Lagged signal.** Using yesterday's `sig_b` is better in train for all three ETFs but worse in validation and
-  test for SPY and IWM, and slightly better for QQQ. The validation edge that picked `sig_b` (91st and 98th
-  placebo percentiles for SPY and IWM) falls to the 68th and 42nd when the signal is lagged one day, so the pick
-  depends on acting at the same close the signal is measured on.
-- **Volatility scaling** cuts drawdowns (in the test at 1 bp, SPY always-overnight from -30% to -20%, `sig_b` from
-  -14% to -8%) and raises Sharpe for always-overnight on SPY and QQQ, but it lowers `sig_b`'s Sharpe on SPY and
-  IWM and does not change any ranking against buy-and-hold.
+  validation and test for SPY and QQQ. `sig_c` is significantly positive only in validation (SPY and QQQ), the
+  sample it was chosen on. In the test always-overnight is significantly below buy-and-hold for SPY, and no CI shows
+  `sig_c` or any overnight strategy beating buy-and-hold.
+- **Flagged days.** Dropping only data problems moves annual returns by less than 1 percentage point in every
+  sample/ETF cell and changes no conclusion.
+- **Signal timing.** The same-close version of `sig_c`, which could not be traded, does worse than the
+  previous-close version in validation (placebo percentiles 79, 59, 57 against 95, 91, 83) and in the test (42, 46,
+  44 against 57, 50, 64). Neither version beats random nights in the test.
+- **Volatility scaling** cuts `sig_c`'s test drawdown roughly in half at 1 bp (SPY -29% to -12%, QQQ -27% to -15%,
+  IWM -29% to -16%) and raises its Sharpe slightly, but does not change any ranking against buy-and-hold.
 
 **Overall:** the overnight premium in these three ETFs is concentrated in the early years and in a minority of
-nights, has faded for SPY and QQQ, and is too small to survive costs of about 1-2 bp per trade. IWM keeps a gap
-that is not significant. The frozen signal `sig_b` adds nothing reliable out of sample, and its validation edge
-depends on same-close timing.
+nights, has shrunk for SPY and QQQ, and is too small to survive costs of about 1-2 bp per trade. IWM keeps a gap
+that is not significant. The selected signal `sig_c` adds nothing reliable out of sample.
 """
 
 
