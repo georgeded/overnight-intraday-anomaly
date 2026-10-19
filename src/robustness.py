@@ -164,14 +164,20 @@ def timing(G, rng):
                              "sharpe 1bp": m["sharpe"], "placebo_percentile": (p_ann < real).mean() * 100})
     return pd.DataFrame(rows)
 
-# Weight is target / trailing vol capped at 1, vol is the 21-day std up to yesterday and the
-# target its 252-day median. The rest sits in cash and costs apply to weight changes
+def vol_weights(r):
+    vol = r[["overnight", "intraday", "ret"]].rolling(VOL_WINDOW, min_periods=VOL_WINDOW).std().shift(1)
+    w = (vol.rolling(VOL_TARGET_WINDOW, min_periods=VOL_TARGET_WINDOW).median() / vol).clip(upper=1.0)
+    # Buy-and-hold enters at the previous close, before that close's return is known
+    w["ret"] = w["ret"].shift(1)
+    return w
+
+# Weight is target / trailing vol capped at 1, with another session's lag for buy-and-hold.
+# The rest sits in cash and costs apply to weight changes
 def vol_scaled(G, ret):
     rows = []
     for t, g0 in G.items():
         r = ret[ret["ticker"] == t].sort_values("date").set_index("date")
-        vol = r[["overnight", "intraday", "ret"]].rolling(VOL_WINDOW, min_periods=VOL_WINDOW).std().shift(1)
-        w = (vol.rolling(VOL_TARGET_WINDOW, min_periods=VOL_TARGET_WINDOW).median() / vol).clip(upper=1.0)
+        w = vol_weights(r)
         g = window(g0, *SAMPLES["test"])
         ww = w.reindex(g["date"]).fillna(1.0).to_numpy()
         zero, pos = np.zeros(len(g)), positions(g)
