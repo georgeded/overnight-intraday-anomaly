@@ -187,6 +187,8 @@ def report(source="crsp"):
            "## 6. Dividends and splits", "",
            md_table(dividend_checks(f), "{:.5f}"), "",
            md_table(split_rows.assign(date=split_rows["date"].dt.date)), "",
+           "The CRSP snapshot omits SPY's distributions on 1993-03-19, 1993-06-18, 1993-09-17 and 1993-12-17. Restoring them moves the training overnight-minus-intraday gap from 3.25 to 3.30 bp/day. The SPY backtest starts in 1994, so this omission does not affect its backtest results.", "",
+           'The inferred dividend also fails to reconcile prices and total return on SPY 1996-12-20 and IWM 2000-12-13: the hand reconstruction misses `ret` by 15.99 and 17.25 bp, respectively. This affects the dividend diagnostics only; the backtest uses `ret` directly.', "",
            "## 7. Half-days", "",
            f"{int(f['flag_half_day'].sum())} ETF half-days. Mean absolute leg return:", "",
            md_table(half), "",

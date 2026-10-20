@@ -83,6 +83,7 @@ def report(source="crsp"):
            "- `rf`: 3-month T-bill converted to a return from the previous close, all of it on the overnight leg",
            "- `overnight_xs = overnight - rf`, `intraday_xs = intraday`",
            "- Samples: train 1993-2012, validation 2013-2018, test 2019-2025", "",
+           'The multiplicative split is an approximation on dividend days: its overnight leg depends on the following close, rather than valuing the sale at the open plus the cash distribution. In the SPY training backtest, using opening proceeds plus distributions changes the always-overnight annual return from 10.2598% to 10.2556%, about 0.004 percentage points a year. The return formulas and reported results here retain the multiplicative convention.', "",
            md_table(counts.rename_axis("sample")), "",
            "## Checks", "",
            "Largest errors in (1 + overnight)(1 + intraday) = 1 + ret, in the compounded version per sample, and in "
@@ -95,7 +96,7 @@ def report(source="crsp"):
            md_table(weekend.rename_axis("days").to_frame(), "{:.3f}")]
 
     p = ROOT / "reports" / "step3_returns.md"
-    p.write_text("\n".join(out))
+    p.write_text("\n".join(out) + "\n")
     print(f"wrote {p.relative_to(ROOT)}")
     return df
 
