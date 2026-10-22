@@ -1,5 +1,3 @@
-# Step 8: final test on 2019-2025, computed once and rendered from the saved results
-
 import pickle
 import subprocess
 import sys
@@ -10,8 +8,7 @@ import pandas as pd
 import statsmodels.api as sm
 
 from backtest import TICKERS, backtest, body, check_engine, load_sample
-from checks import md_table
-from config import CHOSEN_SIGNAL, END, PROCESSED, ROOT
+from config import CHOSEN_SIGNAL, END, PROCESSED, ROOT, md_table, write_report
 from data_layer import load_processed
 from hypothesis_tests import BP, EXCLUDE_FLAGS, daily, h1, h2_regression, load_train, nights, nw_lags, stars
 
@@ -75,34 +72,30 @@ def h2_change_vs_train(n_train, n_test, periods):
     out["sig"] = out["p (3 slopes = train)"].map(stars)
     return out
 
+def h4(train, test, exclude):
+    n_train, n_test = nights(*train, exclude), nights(*test, exclude)
+    return {"h1": pd.concat([h1(train[0], exclude), h1(test[0], exclude, H4_PERIODS)], ignore_index=True),
+            "h1_change": h1_change_vs_train(train[0], test[0], exclude, H4_PERIODS),
+            "h2": h2_by_period(n_train, n_test, H4_PERIODS),
+            "h2_change": h2_change_vs_train(n_train, n_test, H4_PERIODS)}
+
 def compute(source="crsp"):
     commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, cwd=ROOT).stdout.strip()
-    res = {"source": source, "signal": CHOSEN_SIGNAL, "periods": PERIODS, "commit": commit,
-           "run_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")}
-
     ret, sig = load_sample(source, "test")
-    res["engine_check"] = check_engine(ret, sig, "test")
-    res["backtest"] = {p: backtest(source, "test", [CHOSEN_SIGNAL], w) for p, w in PERIODS.items()}
-
-    train_ret, train_sig = load_train(source)
-    test_ret, test_sig = load_test(source)
-    res["h4"] = {}
-    for exclude in [False, True]:
-        n_train, n_test = nights(train_ret, train_sig, exclude), nights(test_ret, test_sig, exclude)
-        res["h4"][exclude] = {"h1": pd.concat([h1(train_ret, exclude), h1(test_ret, exclude, H4_PERIODS)], ignore_index=True),
-                              "h1_change": h1_change_vs_train(train_ret, test_ret, exclude, H4_PERIODS),
-                              "h2": h2_by_period(n_train, n_test, H4_PERIODS),
-                              "h2_change": h2_change_vs_train(n_train, n_test, H4_PERIODS)}
-
+    train, test = load_train(source), load_test(source)
+    res = {"source": source, "signal": CHOSEN_SIGNAL, "periods": PERIODS, "commit": commit,
+           "run_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
+           "engine_check": check_engine(ret, sig, "test"),
+           "backtest": {p: backtest(source, "test", [CHOSEN_SIGNAL], w) for p, w in PERIODS.items()},
+           "h4": {exclude: h4(train, test, exclude) for exclude in [False, True]}}
     with open(RESULTS, "wb") as f:
         pickle.dump(res, f)
     print(f"saved {RESULTS}")
 
 # Older saved results use the previous column names
 def _rename(perf, be):
-    perf = perf.assign(cost=perf["cost"].replace({"spread est.": "spread"}))
-    be = be.rename(columns={"breakeven_vs_cash_bp": "vs_cash", "breakeven_vs_buy_hold_bp": "vs_buy_hold"})
-    return perf, be
+    return (perf.assign(cost=perf["cost"].replace({"spread est.": "spread"})),
+            be.rename(columns={"breakeven_vs_cash_bp": "vs_cash", "breakeven_vs_buy_hold_bp": "vs_buy_hold"}))
 
 def render():
     with open(RESULTS, "rb") as f:
@@ -126,10 +119,7 @@ def render():
                 "Change in the gap against train:", "", md_table(h["h1_change"], "{:.2f}"), "",
                 "H2 regression by period:", "", md_table(h["h2"], "{:.2f}"), "",
                 "Change in the H2 slopes against train:", "", md_table(h["h2_change"], "{:.3f}"), ""]
-
-    path = ROOT / "reports" / "step8_test.md"
-    path.write_text("\n".join(out))
-    print(f"wrote {path.relative_to(ROOT)}")
+    write_report("step8_test.md", out)
 
 if __name__ == "__main__":
     if sys.argv[1:] == ["run"]:

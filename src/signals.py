@@ -1,12 +1,9 @@
-# Step 4: overnight signals and look-ahead tests
-
 import sys
 
 import numpy as np
 import pandas as pd
 
-from checks import md_table
-from config import ROOT
+from config import md_table, write_report
 from data_layer import load_processed, load_vix, save_processed
 from returns import sample_of
 
@@ -43,8 +40,9 @@ def compute_signals(ret, vix, lag=1):
         g["sig_a"] = _bool(intra < 0, intra.notna())
         g["sig_b"] = _bool(intra <= g["intraday_q20"], g["intraday_q20"].notna() & intra.notna())
         g["sig_c"] = _bool(g["vix"] > g["vix_median"], g["vix_median"].notna() & g["vix"].notna())
-        g["sig_ac"] = _bool(g["sig_a"].fillna(False) & g["sig_c"].fillna(False), g["sig_a"].notna() & g["sig_c"].notna())
-        g["sig_bc"] = _bool(g["sig_b"].fillna(False) & g["sig_c"].fillna(False), g["sig_b"].notna() & g["sig_c"].notna())
+        for a in ["a", "b"]:
+            x, c = g[f"sig_{a}"], g["sig_c"]
+            g[f"sig_{a}c"] = _bool(x.fillna(False) & c.fillna(False), x.notna() & c.notna())
 
         inputs = ["intraday", "intraday_q20", "vix", "vix_median"] + SIGNALS
         g[inputs] = g[inputs].shift(EXEC_LAG)
@@ -82,7 +80,6 @@ def perturbation_test(ret, vix, cutoffs, seed=0, lag=1):
             bad.append(T.date())
     return bad
 
-# One day recomputed by hand from the raw windows
 def manual_check(sig, ret, vix, ticker="SPY", date="2008-10-15"):
     g = ret[ret["ticker"] == ticker].sort_values("date").reset_index(drop=True)
     i = g.index[g["date"] == date][0] - EXEC_LAG
@@ -105,7 +102,6 @@ def report(source="crsp"):
     sig["sample"] = sample_of(sig["trade_date"])
     path = save_processed(sig, f"signals_{source}")
 
-    # 20 random cut-offs plus the two sample boundaries
     rng = np.random.default_rng(42)
     dates = ret["date"].drop_duplicates().sort_values()
     dates = dates[dates > dates.iloc[WINDOW + 30]]
@@ -140,10 +136,7 @@ def report(source="crsp"):
            md_table(manual_check(sig, ret, vix), "{:.6f}"), "",
            "## Share of nights each signal is on", "",
            md_table(counts, "{:.3f}")]
-
-    p = ROOT / "reports" / "step4_signals.md"
-    p.write_text("\n".join(out))
-    print(f"wrote {p.relative_to(ROOT)}")
+    write_report("step4_signals.md", out)
 
 if __name__ == "__main__":
-    report(sys.argv[1] if len(sys.argv) > 1 else "crsp")
+    report(*sys.argv[1:2])

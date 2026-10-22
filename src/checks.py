@@ -1,18 +1,16 @@
-# Step 2: data quality checks on CRSP prices, VIX and the risk-free rate
-
 import sys
 
 import numpy as np
 import pandas as pd
 
-from config import END, PERMNOS, PROCESSED, ROOT
+from config import END, PERMNOS, PROCESSED, md_table, write_report
 from data_layer import NYSE, TBILL_FILE, VIX_FILE, load_crsp_raw, load_prices, load_rf, read_tbill, split_legs
 
 EXTREME = 0.05   # a leg moving more than this gets listed
-REVERSAL = 0.03  # both legs past this in opposite directions looks like a bad open
+REVERSAL = 0.03  # both legs past this in opposite directions
 TOL = 1e-6
 
-# Known events used to label big moves, single news days are matched before longer periods
+# Single news days are matched before longer periods
 EVENTS = [
     ("1997-10-27", "1997-10-28", "Asian crisis mini-crash and rebound"),
     ("1998-08-31", "1998-08-31", "Russia default / LTCM sell-off"),
@@ -42,29 +40,16 @@ def event_for(date):
             return label
     return "no known event"
 
-def md_table(df, floatfmt="{:.4f}"):
-    if df.index.name is not None or isinstance(df.index, pd.MultiIndex):
-        df = df.reset_index()
-    lines = ["| " + " | ".join(map(str, df.columns)) + " |", "|" + "---|" * len(df.columns)]
-    for r in df.itertuples(index=False):
-        lines.append("| " + " | ".join(floatfmt.format(v) if isinstance(v, (float, np.floating)) else str(v) for v in r) + " |")
-    return "\n".join(lines)
-
 def short_list(items, n=12):
     items = [str(i) for i in items]
     if not items:
         return "none"
     return ", ".join(items[:n]) + (f" ... (+{len(items) - n} more)" if len(items) > n else "")
 
-# Previous close in today's share units so splits don't look like gaps
-def with_prev_close(df):
+# One boolean column per issue, nothing is dropped. prev_close is in today's share units
+def flag_panel(df):
     df = split_legs(df)
     df["prev_close"] = df.groupby("ticker")["close"].shift() / df["split_factor"]
-    return df
-
-# Panel with both legs and one boolean column per issue, nothing is dropped
-def flag_panel(df):
-    df = with_prev_close(df)
     on, intra = df["overnight"], df["intraday"]
     hi, lo = df["high"] * (1 + TOL), df["low"] * (1 - TOL)
     px = df[["open", "high", "low", "close"]]
@@ -106,7 +91,7 @@ def extreme_moves(f):
                          "other_leg": r[other], "event": event_for(r["date"])})
     return pd.DataFrame(rows).sort_values(["date", "ticker"]).reset_index(drop=True)
 
-# Does the price drop on ex-dates show up in the open? 1 means the full dividend
+# Share of the dividend that shows up in the open on ex-dates
 def dividend_checks(f):
     f = f.assign(div_yield=f["dividend"] / f["prev_close"], raw_gap=f["open"] / f["prev_close"] - 1)
     rows = []
@@ -203,10 +188,7 @@ def report(source="crsp"):
            f"- {rf['rows']} NYSE sessions, negative values: {rf['negative']}, sessions with no rf: {short_list(rf['missing'])}", "",
            md_table(rf["years"], "{:.3f}"), "",
            DECISIONS]
-
-    path = ROOT / "reports" / "step2_data_checks.md"
-    path.write_text("\n".join(out))
-    print(f"wrote {path.relative_to(ROOT)}")
+    write_report("step2_data_checks.md", out)
 
 DECISIONS = """## 10. Decisions
 
@@ -223,4 +205,4 @@ DECISIONS = """## 10. Decisions
 """
 
 if __name__ == "__main__":
-    report(sys.argv[1] if len(sys.argv) > 1 else "crsp")
+    report(*sys.argv[1:2])

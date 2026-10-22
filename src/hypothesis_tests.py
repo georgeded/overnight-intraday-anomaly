@@ -1,5 +1,3 @@
-# Step 5: hypothesis tests on the train sample
-
 import sys
 
 import numpy as np
@@ -7,18 +5,15 @@ import pandas as pd
 import statsmodels.api as sm
 from statsmodels.stats.multitest import multipletests
 
-from checks import md_table
-from config import ROOT, SAMPLES
+from config import SAMPLES, TICKERS, md_table, write_report
 from data_layer import load_processed
 from signals import SIGNALS
 
 TRAIN_END = pd.Timestamp(SAMPLES["train"][1])
 PERIODS = {"1993-2012": ("1993-01-01", "2012-12-31"), "1993-2007": ("1993-01-01", "2007-12-31"), "2008-2012": ("2008-01-01", "2012-12-31")}
 BP = 1e4
-TICKERS = ["SPY", "QQQ", "IWM"]
 
-# Data problems only, never flags based on the size of the returns. Ex-dividend days stay
-# because the dividend is part of the overnight return
+# Data problems only, never the size of the returns. Ex-dividend days stay since the dividend is overnight return
 EXCLUDE_FLAGS = ["flag_stale_open", "flag_ohlc", "flag_bad_price", "flag_half_day", "flag_split"]
 
 def nw_lags(n):
@@ -44,7 +39,6 @@ def daily(ret, exclude):
     d = ret[~ret["flag_first_row"]]
     return d[~d["flagged"]] if exclude else d
 
-# One row per signal night, with the overnight return that follows it
 def nights(ret, sig, exclude):
     nxt = ret[["date", "ticker", "overnight_xs", "overnight", "flagged"]].rename(columns={"date": "trade_date", "flagged": "flagged_next"})
     n = sig.merge(nxt, on=["trade_date", "ticker"]).merge(ret[["date", "ticker", "flagged"]], on=["date", "ticker"], how="left")
@@ -155,30 +149,23 @@ def verdict(p_all, p_clean):
         return "supported"
     return "mixed" if min(p_all, p_clean) < 0.05 else "not supported"
 
-# One row per hypothesis and ETF, on all days and without flagged days
 def summary(full, clean):
     rows = []
+    def add(hypothesis, ticker, estimate, p_all, p_clean):
+        rows.append({"hypothesis": hypothesis, "ticker": ticker, "estimate": estimate,
+                     "p_all_days": p_all, "p_clean": p_clean, "verdict": verdict(p_all, p_clean)})
     for t in TICKERS:
-        a = full["h1"].query("ticker == @t and period == '1993-2012'").iloc[0]
-        b = clean["h1"].query("ticker == @t and period == '1993-2012'").iloc[0]
-        rows.append({"hypothesis": "H1 overnight beats intraday", "ticker": t, "estimate": f"{a['diff_bp']:.2f} bp a day",
-                     "p_all_days": a["p_diff"], "p_clean": b["p_diff"], "verdict": verdict(a["p_diff"], b["p_diff"])})
+        a, b = (r["h1"][(r["h1"]["ticker"] == t) & (r["h1"]["period"] == "1993-2012")].iloc[0] for r in (full, clean))
+        add("H1 overnight beats intraday", t, f"{a['diff_bp']:.2f} bp a day", a["p_diff"], b["p_diff"])
     for t in TICKERS:
-        a = full["h1_change"].query("ticker == @t").iloc[0]
-        b = clean["h1_change"].query("ticker == @t").iloc[0]
-        rows.append({"hypothesis": "H1 gap smaller after 2008", "ticker": t, "estimate": f"{a['change_bp']:.2f} bp a day",
-                     "p_all_days": a["p"], "p_clean": b["p"], "verdict": verdict(a["p"], b["p"])})
+        a, b = (r["h1_change"].set_index("ticker").loc[t] for r in (full, clean))
+        add("H1 gap smaller after 2008", t, f"{a['change_bp']:.2f} bp a day", a["p"], b["p"])
     for t in TICKERS:
-        a = full["h2_onoff"].query("ticker == @t")
-        b = clean["h2_onoff"].query("ticker == @t")
-        rows.append({"hypothesis": "H2 signal nights earn more", "ticker": t,
-                     "estimate": f"{int((a['p_holm'] < 0.05).sum())} of 5 signals after Holm",
-                     "p_all_days": a["p_holm"].min(), "p_clean": b["p_holm"].min(),
-                     "verdict": verdict(a["p_holm"].min(), b["p_holm"].min())})
-    a = full["h3"].query("coefficient == '3 slopes jointly (Wald)'").iloc[0]
-    b = clean["h3"].query("coefficient == '3 slopes jointly (Wald)'").iloc[0]
-    rows.append({"hypothesis": "H3 IWM reacts differently from SPY", "ticker": "SPY vs IWM", "estimate": "3 slopes jointly",
-                 "p_all_days": a["p"], "p_clean": b["p"], "verdict": verdict(a["p"], b["p"])})
+        a, b = (r["h2_onoff"][r["h2_onoff"]["ticker"] == t] for r in (full, clean))
+        add("H2 signal nights earn more", t, f"{int((a['p_holm'] < 0.05).sum())} of 5 signals after Holm",
+            a["p_holm"].min(), b["p_holm"].min())
+    a, b = (r["h3"].set_index("coefficient").loc["3 slopes jointly (Wald)"] for r in (full, clean))
+    add("H3 IWM reacts differently from SPY", "SPY vs IWM", "3 slopes jointly", a["p"], b["p"])
     return pd.DataFrame(rows)
 
 def section(res, label):
@@ -205,13 +192,8 @@ def report(source="crsp"):
            "## Summary", "",
            "Supported means p < 0.05 both on all days and without flagged days.", "",
            md_table(summary(full, clean), "{:.3f}"), ""]
-    out += section(full, "All train days")
-    out += section(clean, "Without flagged days")
-
-    p = ROOT / "reports" / "step5_tests.md"
-    p.write_text("\n".join(out))
-    print(f"wrote {p.relative_to(ROOT)}")
+    write_report("step5_tests.md", out + section(full, "All train days") + section(clean, "Without flagged days"))
     return full, clean
 
 if __name__ == "__main__":
-    report(sys.argv[1] if len(sys.argv) > 1 else "crsp")
+    report(*sys.argv[1:2])

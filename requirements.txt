@@ -1,7 +1,6 @@
 pandas
 pyarrow
 numpy
-yfinance
 exchange_calendars
 psycopg[binary]
 statsmodels

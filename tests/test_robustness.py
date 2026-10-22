@@ -1,5 +1,3 @@
-# Synthetic checks for volatility sizing, no market data is loaded
-
 import sys
 import unittest
 from pathlib import Path

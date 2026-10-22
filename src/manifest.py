@@ -1,5 +1,3 @@
-# Step 1: record source, coverage and SHA-256 of every raw file
-
 import hashlib
 from datetime import datetime, timezone
 
@@ -7,8 +5,7 @@ import pandas as pd
 
 from config import RAW
 
-# file: (source, description, date column, first date it must cover)
-SOURCES = {
+SOURCES = {  # file: (source, description, date column, first date it must cover)
     "crsp_daily.csv": ("WRDS CRSP", "CRSP v2 daily, PERMNO 84398 SPY, 86755 QQQ, 88222 IWM", "DlyCalDt", "1993-01-29"),
     "wrds_vix.csv": ("WRDS CBOE", "VIX index, vix column = close", "date", "1993-01-04"),
     "wrds_tbill3m.csv": ("WRDS FRB H.15", "3-month T-bill, annual % discount basis", "date", "1993-01-01"),

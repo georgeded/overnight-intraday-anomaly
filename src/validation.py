@@ -1,13 +1,10 @@
-# Step 7: validation backtest and signal choice
-
 import sys
 
 import numpy as np
 import pandas as pd
 
 from backtest import TICKERS, backtest, body, check_engine, load_sample
-from checks import md_table
-from config import ROOT, SAMPLES
+from config import SAMPLES, md_table, write_report
 
 SELECT_COST = "1 bp"
 
@@ -40,12 +37,8 @@ def report(source="crsp"):
            "Sharpe at 1 bp, train vs validation:", "",
            md_table(sharpe.rename_axis("strategy"), "{:.2f}"), "",
            "## Validation window", ""]
-    out += body(perf, be, plc, win, check_engine(ret, sig, "validation"))
-
-    p = ROOT / "reports" / "step7_validation.md"
-    p.write_text("\n".join(out))
-    print(f"wrote {p.relative_to(ROOT)}, chosen signal: {chosen}")
+    write_report("step7_validation.md", out + body(perf, be, plc, win, check_engine(ret, sig, "validation")))
     return chosen
 
 if __name__ == "__main__":
-    report(sys.argv[1] if len(sys.argv) > 1 else "crsp")
+    report(*sys.argv[1:2])

@@ -1,12 +1,10 @@
-# Step 3: build and verify overnight, intraday and risk-free returns
-
 import sys
 
 import numpy as np
 import pandas as pd
 
-from checks import flag_panel, md_table
-from config import END, ROOT, SAMPLES
+from checks import flag_panel
+from config import END, SAMPLES, md_table, write_report
 from data_layer import NYSE, load_prices, load_rf, save_processed
 
 def sample_of(dates):
@@ -26,7 +24,7 @@ def build(source="crsp"):
     df = df.merge(rf, on="date", how="left")
     df.loc[df["flag_first_row"], ["rf", "rf_days"]] = np.nan
 
-    # all of the day's rf sits on the overnight leg, an intraday-only position is in cash overnight
+    # the whole day's rf sits on the overnight leg
     df["rf_overnight"] = df["rf"]
     df["rf_intraday"] = np.where(df["flag_first_row"], np.nan, 0.0)
     df["overnight_xs"] = df["overnight"] - df["rf_overnight"]
@@ -53,7 +51,6 @@ def checks(df):
                      "rf_missing": int(g["rf"].isna().sum())})
     return pd.DataFrame(rows)
 
-# Dividend and split days recomputed by hand from unadjusted prices
 def hand_checks(df):
     d = df.assign(prev_close=df.groupby("ticker")["close"].shift())
     picks = []
@@ -93,12 +90,9 @@ def report(source="crsp"):
            "Hand checks on ex-dividend and split days:", "",
            md_table(hand_checks(df), "{:.5f}"), "",
            "Mean rf by calendar days covered (1 is a weekday, 3 a weekend):", "",
-           md_table(weekend.rename_axis("days").to_frame(), "{:.3f}")]
-
-    p = ROOT / "reports" / "step3_returns.md"
-    p.write_text("\n".join(out) + "\n")
-    print(f"wrote {p.relative_to(ROOT)}")
+           md_table(weekend.rename_axis("days").to_frame(), "{:.3f}"), ""]
+    write_report("step3_returns.md", out)
     return df
 
 if __name__ == "__main__":
-    report(sys.argv[1] if len(sys.argv) > 1 else "crsp")
+    report(*sys.argv[1:2])

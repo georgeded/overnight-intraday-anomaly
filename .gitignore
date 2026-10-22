@@ -19,6 +19,3 @@ venv/
 
 # old Yahoo/FRED/CBOE snapshot, kept locally only
 archive/
-
-# old nested clone, kept locally only
-overnight_OLD/

@@ -1,5 +1,3 @@
-# Step 9: robustness checks and cumulative-return charts, descriptive only
-
 import sys
 
 import matplotlib
@@ -10,9 +8,8 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 
-from backtest import TICKERS, ann_return, legs, load_sample, metrics, placebo, run, years_of
-from checks import md_table
-from config import CHOSEN_SIGNAL, END, ROOT, SAMPLES
+from backtest import ann_return, legs, load_sample, metrics, placebo, run, sharpe, years_of
+from config import CHOSEN_SIGNAL, END, ROOT, SAMPLES, TICKERS, md_table, write_report
 from hypothesis_tests import BP, EXCLUDE_FLAGS, nw_lags, stars
 from signals import SIGNALS
 
@@ -40,9 +37,6 @@ def window(g, a, b):
 def evaluate(g, p_on, p_in, cost_bp):
     d, trades = run(g, p_on, p_in, cost_bp / 1e4)
     return metrics(d, g["rf"].to_numpy(), trades, np.mean(p_on), years_of(g))
-
-def sharpe(x):
-    return x.mean() / x.std(ddof=1) * np.sqrt(252)
 
 def eras(G, rng):
     perf, gap = [], []
@@ -98,8 +92,9 @@ def walk_forward(G):
     for y in range(int(SAMPLES["test"][0][:4]), pd.Timestamp(END).year + 1):
         a, b = f"{y - 5}-01-01", f"{y - 1}-12-31"
         rows = []
+        gs = [window(g0, a, b) for g0 in G.values()]
         for s in SIGNALS:
-            ms = [evaluate(window(g0, a, b), window(g0, a, b)[s].to_numpy().astype(float), np.zeros(len(window(g0, a, b))), 1) for g0 in G.values()]
+            ms = [evaluate(g, g[s].to_numpy().astype(float), np.zeros(len(g)), 1) for g in gs]
             rows.append({"signal": s, "mean_sharpe": np.mean([m["sharpe"] for m in ms]), "trades": np.mean([m["trades_per_yr"] for m in ms])})
         r = pd.DataFrame(rows).assign(r2=lambda x: x["mean_sharpe"].round(2))
         best = r.sort_values(["r2", "trades"], ascending=[False, True]).iloc[0]
@@ -167,12 +162,10 @@ def timing(G, rng):
 def vol_weights(r):
     vol = r[["overnight", "intraday", "ret"]].rolling(VOL_WINDOW, min_periods=VOL_WINDOW).std().shift(1)
     w = (vol.rolling(VOL_TARGET_WINDOW, min_periods=VOL_TARGET_WINDOW).median() / vol).clip(upper=1.0)
-    # Buy-and-hold enters at the previous close, before that close's return is known
-    w["ret"] = w["ret"].shift(1)
+    w["ret"] = w["ret"].shift(1)  # buy-and-hold enters at the previous close, before its return is known
     return w
 
-# Weight is target / trailing vol capped at 1, with another session's lag for buy-and-hold.
-# The rest sits in cash and costs apply to weight changes
+# The rest of the weight sits in cash and costs apply to weight changes
 def vol_scaled(G, ret):
     rows = []
     for t, g0 in G.items():
@@ -219,7 +212,6 @@ def chart(G, cost_bp, path):
         ax.tick_params(colors="#52514e", labelsize=8)
         ax.set_facecolor("#fcfcfb")
 
-        # room on the right for the labels, a tick every 4 years
         first, last = g["date"].min().year, g["date"].max().year
         ax.set_xlim(g["date"].min(), g["date"].max() + pd.Timedelta(days=1400))
         ax.set_xticks([pd.Timestamp(f"{y}-01-01") for y in range(first + (4 - first % 4) % 4, last + 1, 4)])
@@ -261,10 +253,7 @@ def report(source="crsp"):
            "The same-close version uses the day's own close and VIX, which a market-on-close order cannot know in time.", "",
            md_table(tim, "{:.2f}"), "",
            "## 8. Volatility-scaled sizing in the test period (1 bp)", "", md_table(vol_scaled(G, ret), "{:.2f}")]
-
-    p = ROOT / "reports" / "step9_robustness.md"
-    p.write_text("\n".join(out))
-    print(f"wrote {p.relative_to(ROOT)}")
+    write_report("step9_robustness.md", out)
 
 if __name__ == "__main__":
-    report(sys.argv[1] if len(sys.argv) > 1 else "crsp")
+    report(*sys.argv[1:2])
