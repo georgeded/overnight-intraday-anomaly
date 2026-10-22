@@ -19,3 +19,6 @@ venv/
 
 # old Yahoo/FRED/CBOE snapshot, kept locally only
 archive/
+
+# step reports, written when the notebook runs
+reports/*.md

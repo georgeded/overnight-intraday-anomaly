@@ -2,7 +2,6 @@ pandas
 pyarrow
 numpy
 exchange_calendars
-psycopg[binary]
 statsmodels
 scipy
 matplotlib
