@@ -1,5 +1,15 @@
 # Overnight vs intraday returns
 
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](requirements.txt)
+[![pandas](https://img.shields.io/badge/pandas-data-150458?logo=pandas&logoColor=white)](src/data_layer.py)
+[![statsmodels](https://img.shields.io/badge/statsmodels-Newey--West-4051B5)](src/hypothesis_tests.py)
+[![SciPy](https://img.shields.io/badge/SciPy-stats-8CAAE6?logo=scipy&logoColor=white)](requirements.txt)
+[![Jupyter](https://img.shields.io/badge/Jupyter-notebook-F37626?logo=jupyter&logoColor=white)](notebook.ipynb)
+[![Data](https://img.shields.io/badge/data-CRSP%20via%20WRDS-8C1D40)](#data)
+[![Sample](https://img.shields.io/badge/sample-1993--2025-555555)](#data)
+[![ETFs](https://img.shields.io/badge/ETFs-SPY%20%7C%20QQQ%20%7C%20IWM-2E7D32)](#findings)
+[![Tests](https://img.shields.io/badge/tests-unittest-2E7D32?logo=python&logoColor=white)](tests)
+
 Do US stocks earn their returns overnight, while the market is closed? And can a strategy that holds only overnight beat buy-and-hold once trading costs are counted?
 
 The project covers SPY, QQQ and IWM from 1993 to 2025, with a train (1993-2012) / validation (2013-2018) / test (2019-2025) split. The final test was rerun after a methodology review, so it is not a clean holdout (see Limitations).
